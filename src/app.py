@@ -1,21 +1,27 @@
 import logging
 from typing import List, Dict, Union, Tuple
 
+import pandas as pd
 import dash
 import dash_bootstrap_components as dbc
-from dash import html, dcc, callback, Input, Output
+from dash import html, callback, Input, Output
 from dash import State
 from dash.exceptions import PreventUpdate
 from datetime import date
+from dash import callback_context
 
 from src.database.connection import get_db
 from src.database.models import Categoria
 from src.components.forms import transaction_form
-from src.database.operations import create_transaction
+from src.database.operations import (
+    create_transaction,
+    get_transactions,
+)
 
 # Configurar logging
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
@@ -53,11 +59,79 @@ def get_category_options() -> List[Dict[str, Union[str, int]]]:
         return []
 
 
+def render_transactions_table() -> dbc.Table:
+    """
+    Renders a table with recent transactions.
+
+    Fetches all transactions from database and formats them
+    into a styled Bootstrap table with monetary formatting.
+
+    Returns:
+        dbc.Table component with transaction data or empty message.
+    """
+    try:
+        transacoes = get_transactions()
+
+        if not transacoes:
+            return html.P(
+                "Nenhuma transação registrada.",
+                className="text-muted mt-3",
+            )
+
+        # Converter lista de dicts para DataFrame
+        df = pd.DataFrame(transacoes)
+
+        # Remover colunas que contêm objetos/dicts (categoria, tags, etc)
+        colunas_escalares = [
+            "data",
+            "descricao",
+            "valor",
+            "tipo",
+        ]
+        df = df[[col for col in colunas_escalares if col in df.columns]]
+
+        # Formatar valor como moeda brasileira
+        df["valor"] = df["valor"].apply(
+            lambda x: f"R$ {x:,.2f}".replace(",", "X")
+            .replace(".", ",")
+            .replace("X", ".")
+        )
+
+        # Renomear colunas para português
+        df = df.rename(
+            columns={
+                "data": "Data",
+                "descricao": "Descrição",
+                "valor": "Valor",
+                "tipo": "Tipo",
+            }
+        )
+
+        return dbc.Table.from_dataframe(
+            df,
+            striped=True,
+            bordered=True,
+            hover=True,
+            responsive=True,
+            className="mt-3",
+        )
+
+    except Exception as e:
+        logger.error(f"✗ Erro ao renderizar tabela: {e}")
+        return html.P(
+            "Erro ao carregar transações.",
+            className="text-danger mt-3",
+        )
+
+
 # Layout da aplicação
 app.layout = dbc.Container(
     [
         dbc.Row(
-            dbc.Col(html.H1("FinanceTSK", className="text-center mt-5 mb-5"), width=12)
+            dbc.Col(
+                html.H1("FinanceTSK", className="text-center mt-5 mb-5"),
+                width=12,
+            )
         ),
         dbc.Row(
             dbc.Col(
@@ -81,6 +155,8 @@ app.layout = dbc.Container(
             color="danger",
             className="mt-4",
         ),
+        html.H4("Últimas Movimentações", className="mt-4"),
+        html.Div(id="tabela-transacoes"),
     ],
     fluid=True,
     className="mt-4",
@@ -93,8 +169,10 @@ app.layout = dbc.Container(
         [Output("alerta-erro", "children"), Output("alerta-erro", "is_open")],
         Output("input-despesa-descricao", "value"),
         Output("input-despesa-valor", "value"),
+        Output("tabela-transacoes", "children"),
     ],
     Input("btn-salvar-despesa", "n_clicks"),
+    Input("tabela-transacoes", "id"),
     [
         State("input-despesa-descricao", "value"),
         State("input-despesa-valor", "value"),
@@ -102,10 +180,11 @@ app.layout = dbc.Container(
         State("dcc-despesa-categoria", "value"),
         State("input-despesa-tags", "value"),
     ],
-    prevent_initial_call=True,
+    prevent_initial_call=False,
 )
-def salvar_despesa(
-    n_clicks: int,
+def atualizar_transacoes(
+    n_clicks: Union[int, None],
+    tabela_id: str,
     descricao: str,
     valor: Union[float, None],
     data_str: str,
@@ -116,37 +195,40 @@ def salvar_despesa(
     Tuple[str, bool],
     str,
     Union[float, None],
+    dbc.Table,
 ]:
     """
-    Salva uma nova despesa no banco de dados.
+    Atualiza tabela ao carregar página ou salvar despesa.
 
-    Converte os dados do formulário para os tipos apropriados,
-    valida os campos e persiste a transação no banco de dados.
-
-    Args:
-        n_clicks: Número de cliques no botão.
-        descricao: Descrição da despesa.
-        valor: Valor da despesa.
-        data_str: Data em formato YYYY-MM-DD.
-        categoria_id: ID da categoria.
-        tags: Tags separadas por vírgula.
+    Distingue entre carregamento inicial e salvamento usando
+    callback_context para executar lógica apropriada.
 
     Returns:
-        Tupla com mensagens de alerta (sucesso e erro) e campos limpos.
+        Tupla com alertas, campos limpos e tabela atualizada.
     """
+    ctx = callback_context
+    
+    # Carregamento inicial da página
+    if not ctx.triggered or ctx.triggered[0]["prop_id"] == "tabela-transacoes.id":
+        logger.info("Carregando tabela inicial...")
+        return (
+            ("", False),
+            ("", False),
+            "",
+            None,
+            render_transactions_table(),
+        )
+
+    # Salvamento de despesa
     if n_clicks is None:
         raise PreventUpdate
 
     logger.info("Tentando salvar nova despesa...")
 
     try:
-        # Converter valor para float
         valor_convertido = float(valor) if valor else 0.0
-
-        # Converter data de string para objeto date
         data_objeto = date.fromisoformat(data_str)
 
-        # Chamar função para criar transação
         sucesso, mensagem = create_transaction(
             tipo="despesa",
             descricao=descricao,
@@ -156,42 +238,46 @@ def salvar_despesa(
             tags=tags,
         )
 
+        tabela_atualizada = render_transactions_table()
+
         if sucesso:
-            logger.info(
-                f"✓ Despesa salva com sucesso: {descricao} - R$ {valor_convertido}"
-            )
+            logger.info(f"✓ Despesa salva: {descricao} - R$ {valor_convertido}")
             return (
-                (mensagem, True),  # alerta-sucesso
-                ("", False),  # alerta-erro
-                "",  # limpar descricao
-                None,  # limpar valor
+                (mensagem, True),
+                ("", False),
+                "",
+                None,
+                tabela_atualizada,
             )
         else:
             logger.warning(f"✗ Erro ao salvar despesa: {mensagem}")
             return (
-                ("", False),  # alerta-sucesso
-                (mensagem, True),  # alerta-erro
-                descricao,  # manter descricao
-                valor,  # manter valor
+                ("", False),
+                (mensagem, True),
+                descricao,
+                valor,
+                tabela_atualizada,
             )
 
     except ValueError as e:
         mensagem_erro = f"Erro ao converter dados: {str(e)}"
         logger.error(f"✗ {mensagem_erro}")
         return (
-            ("", False),  # alerta-sucesso
-            (mensagem_erro, True),  # alerta-erro
-            descricao,  # manter descricao
-            valor,  # manter valor
+            ("", False),
+            (mensagem_erro, True),
+            descricao,
+            valor,
+            render_transactions_table(),
         )
     except Exception as e:
         mensagem_erro = f"Erro inesperado: {str(e)}"
         logger.error(f"✗ {mensagem_erro}")
         return (
-            ("", False),  # alerta-sucesso
-            (mensagem_erro, True),  # alerta-erro
-            descricao,  # manter descricao
-            valor,  # manter valor
+            ("", False),
+            (mensagem_erro, True),
+            descricao,
+            valor,
+            render_transactions_table(),
         )
 
 
