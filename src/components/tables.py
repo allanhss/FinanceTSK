@@ -60,22 +60,17 @@ def render_transactions_table(transacoes: List[Dict]) -> dbc.Table | dbc.Alert:
         ]
 
         # Manter apenas colunas que existem no DataFrame
-        colunas_existentes = [
-            col for col in colunas_desejadas if col in df.columns
-        ]
+        colunas_existentes = [col for col in colunas_desejadas if col in df.columns]
         df = df[colunas_existentes]
 
         # Formatar data para DD/MM/YYYY
         if "data" in df.columns:
-            df["data"] = pd.to_datetime(df["data"]).dt.strftime(
-                "%d/%m/%Y"
-            )
+            df["data"] = pd.to_datetime(df["data"]).dt.strftime("%d/%m/%Y")
 
         # Formatar valor como moeda brasileira R$ 1.234,56
         if "valor" in df.columns:
             df["valor"] = df["valor"].apply(
-                lambda x: f"R$ {x:,.2f}"
-                .replace(",", "X")
+                lambda x: f"R$ {x:,.2f}".replace(",", "X")
                 .replace(".", ",")
                 .replace("X", ".")
             )
