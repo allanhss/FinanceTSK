@@ -1,0 +1,33 @@
+# Instruções Copilot - /src/pages
+
+Páginas completas do aplicativo Dash. Cada arquivo é uma página.
+
+## Estrutura de Página
+
+Cada página deve ter:
+
+1. **Layout function**: Retorna o layout Dash da página
+2. **Callbacks**: Lógica de interação da página
+3. **Helper functions**: Funções auxiliares específicas da página
+
+## Exemplo
+
+```python
+# receitas.py
+
+def layout() -> html.Div:
+    """Retorna layout da página de receitas."""
+    return html.Div([...])
+
+@app.callback(...)
+def handle_form_submit(...):
+    """Processa envio do formulário de receita."""
+    pass
+```
+
+## Diretrizes
+
+- Use dash-bootstrap-components para layout responsivo
+- Prefira dbc.Row e dbc.Col para organização
+- Callbacks devem validar inputs antes de processar
+- Sempre retorne feedback visual (sucesso/erro) ao usuário

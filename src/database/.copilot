@@ -1,0 +1,36 @@
+# Instruções Copilot - /src/database
+
+Camada de acesso a dados. Todo código que interage com SQLite deve estar aqui.
+
+## Responsabilidades
+
+- models.py: Definição das tabelas usando SQLAlchemy ORM
+- operations.py: Funções CRUD (Create, Read, Update, Delete)
+- migrations.py: Scripts de migração de schema (futuro)
+
+## Regras
+
+1. SEMPRE use SQLAlchemy, nunca SQL raw
+2. SEMPRE use context managers (with) para sessions
+3. SEMPRE trate exceções de banco
+4. SEMPRE use type hints
+5. NUNCA retorne objetos SQLAlchemy diretamente - converta para dict/dataclass
+
+## Exemplo de função esperada
+
+```python
+def create_receita(
+    descricao: str,
+    valor: float,
+    data: date,
+    pessoa_origem: str,
+    categoria: str,
+    tags: List[str]
+) -> Optional[int]:
+    """
+    Cria uma nova receita no banco.
+    
+    Returns:
+        ID da receita criada ou None se houver erro
+    """
+```

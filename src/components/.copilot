@@ -1,0 +1,39 @@
+# Instruções Copilot - /src/components
+
+Componentes reutilizáveis do Dash.
+
+## O que vai aqui
+
+- Formulários padrão (forms.py)
+- Cards informativos
+- Tabelas customizadas
+- Gráficos padrão (charts.py)
+- Modais
+- Notificações
+
+## Princípios
+
+1. Componentes devem ser **reutilizáveis** em múltiplas páginas
+2. Aceitar **parâmetros** para customização
+3. Retornar **componentes Dash** prontos para uso
+4. Documentar **props esperadas**
+
+## Exemplo
+
+```python
+def create_card_resumo(
+    titulo: str,
+    valor: float,
+    icone: str,
+    cor: str = "primary"
+) -> dbc.Card:
+    """
+    Cria card de resumo financeiro.
+    
+    Args:
+        titulo: Texto do cabeçalho
+        valor: Valor a exibir (será formatado como moeda)
+        icone: Nome do ícone Bootstrap
+        cor: Cor do card (primary, success, danger, etc)
+    """
+```

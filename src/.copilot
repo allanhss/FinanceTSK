@@ -1,0 +1,17 @@
+# Instruções Copilot - /src
+
+Esta pasta contém todo o código fonte da aplicação.
+
+## Convenções desta Pasta
+
+- Cada subpasta tem responsabilidade única e bem definida
+- Evite dependências circulares entre módulos
+- Use imports absolutos: `from src.database.models import Transaction`
+- Mantenha arquivos com no máximo 300 linhas
+
+## Quando criar código aqui
+
+- app.py: Apenas configuração do Dash e rotas
+- Lógica de negócio vai em módulos específicos (database/, utils/)
+- Componentes visuais vão em components/
+- Páginas completas vão em pages/

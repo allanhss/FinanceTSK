@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Dash
+*.pyc
+.DS_Store
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Dados locais (IMPORTANTE: não versionar dados pessoais)
+data/finance.db
+data/backups/
+data/config.json
+*.db
+*.db-journal
+
+# Ambiente
+.env
+.env.local
+
+# Logs
+*.log
+logs/
+
+# Sistema Operacional
+Thumbs.db
+.DS_Store
+
+# Copilot (opcional - se quiser versionar, remova estas linhas)
+# .github/copilot-instructions.md
+
+# Build do executável
+build/
+dist/
+*.spec

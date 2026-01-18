@@ -1,0 +1,26 @@
+# Core Framework
+dash==2.14.2
+dash-bootstrap-components==1.5.0
+
+# Database
+pandas==2.1.4
+sqlalchemy==2.0.23
+
+# Utilities
+python-dotenv==1.0.0
+python-dateutil==2.8.2
+
+# Charts and Visualization
+plotly==5.18.0
+
+# Development
+pytest==7.4.3
+black==23.12.1
+flake8==6.1.0
+
+# Future Features (comentadas até a Fase 2)
+# beautifulsoup4==4.12.2  # Web scraping NF
+# requests==2.31.0        # HTTP requests
+# pyzbar==0.1.9           # QR Code reading
+# opencv-python==4.8.1.78 # Image processing
+# pytesseract==0.3.10     # OCR
