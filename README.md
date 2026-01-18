@@ -4,7 +4,7 @@ Sistema de gestão financeira pessoal desenvolvido como projeto de portfólio e 
 
 ## 🎯 Objetivo
 
-Criar uma ferramenta completa de controle financeiro pessoal com custo zero de operação, utilizando armazenamento em nuvem pessoal (OneDrive/Google Drive) e tecnologias modernas.
+Criar uma ferramenta completa de controle financeiro pessoal com custo zero de operação, utilizando armazenamento em nuvem pessoal (OneDrive/Google Drive).
 
 ## ✨ Funcionalidades
 
