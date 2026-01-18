@@ -13,6 +13,7 @@ from dash import callback_context
 from src.database.connection import get_db
 from src.database.models import Categoria
 from src.components.forms import transaction_form
+from src.components.tables import render_transactions_table
 from src.database.operations import (
     create_transaction,
     get_transactions,
@@ -57,71 +58,6 @@ def get_category_options() -> List[Dict[str, Union[str, int]]]:
     except Exception as e:
         logger.error(f"✗ Erro ao carregar categorias: {e}")
         return []
-
-
-def render_transactions_table() -> dbc.Table:
-    """
-    Renders a table with recent transactions.
-
-    Fetches all transactions from database and formats them
-    into a styled Bootstrap table with monetary formatting.
-
-    Returns:
-        dbc.Table component with transaction data or empty message.
-    """
-    try:
-        transacoes = get_transactions()
-
-        if not transacoes:
-            return html.P(
-                "Nenhuma transação registrada.",
-                className="text-muted mt-3",
-            )
-
-        # Converter lista de dicts para DataFrame
-        df = pd.DataFrame(transacoes)
-
-        # Remover colunas que contêm objetos/dicts (categoria, tags, etc)
-        colunas_escalares = [
-            "data",
-            "descricao",
-            "valor",
-            "tipo",
-        ]
-        df = df[[col for col in colunas_escalares if col in df.columns]]
-
-        # Formatar valor como moeda brasileira
-        df["valor"] = df["valor"].apply(
-            lambda x: f"R$ {x:,.2f}".replace(",", "X")
-            .replace(".", ",")
-            .replace("X", ".")
-        )
-
-        # Renomear colunas para português
-        df = df.rename(
-            columns={
-                "data": "Data",
-                "descricao": "Descrição",
-                "valor": "Valor",
-                "tipo": "Tipo",
-            }
-        )
-
-        return dbc.Table.from_dataframe(
-            df,
-            striped=True,
-            bordered=True,
-            hover=True,
-            responsive=True,
-            className="mt-3",
-        )
-
-    except Exception as e:
-        logger.error(f"✗ Erro ao renderizar tabela: {e}")
-        return html.P(
-            "Erro ao carregar transações.",
-            className="text-danger mt-3",
-        )
 
 
 # Layout da aplicação
@@ -195,7 +131,7 @@ def atualizar_transacoes(
     Tuple[str, bool],
     str,
     Union[float, None],
-    dbc.Table,
+    Union[dbc.Table, dbc.Alert],
 ]:
     """
     Atualiza tabela ao carregar página ou salvar despesa.
@@ -207,16 +143,17 @@ def atualizar_transacoes(
         Tupla com alertas, campos limpos e tabela atualizada.
     """
     ctx = callback_context
-    
+
     # Carregamento inicial da página
     if not ctx.triggered or ctx.triggered[0]["prop_id"] == "tabela-transacoes.id":
         logger.info("Carregando tabela inicial...")
+        transacoes = get_transactions()
         return (
             ("", False),
             ("", False),
             "",
             None,
-            render_transactions_table(),
+            render_transactions_table(transacoes),
         )
 
     # Salvamento de despesa
@@ -238,7 +175,8 @@ def atualizar_transacoes(
             tags=tags,
         )
 
-        tabela_atualizada = render_transactions_table()
+        transacoes_atualizadas = get_transactions()
+        tabela_atualizada = render_transactions_table(transacoes_atualizadas)
 
         if sucesso:
             logger.info(f"✓ Despesa salva: {descricao} - R$ {valor_convertido}")
@@ -262,22 +200,24 @@ def atualizar_transacoes(
     except ValueError as e:
         mensagem_erro = f"Erro ao converter dados: {str(e)}"
         logger.error(f"✗ {mensagem_erro}")
+        transacoes = get_transactions()
         return (
             ("", False),
             (mensagem_erro, True),
             descricao,
             valor,
-            render_transactions_table(),
+            render_transactions_table(transacoes),
         )
     except Exception as e:
         mensagem_erro = f"Erro inesperado: {str(e)}"
         logger.error(f"✗ {mensagem_erro}")
+        transacoes = get_transactions()
         return (
             ("", False),
             (mensagem_erro, True),
             descricao,
             valor,
-            render_transactions_table(),
+            render_transactions_table(transacoes),
         )
 
 
