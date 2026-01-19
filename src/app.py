@@ -1,445 +1,419 @@
 import logging
-from typing import List, Dict, Union, Tuple
-
-import dash
-import dash_bootstrap_components as dbc
-from dash import html, callback, Input, Output, State, dcc
-from dash.exceptions import PreventUpdate
 from datetime import date
+from typing import Dict, List
 
-from src.database.connection import get_db
-from src.database.models import Categoria
-from src.components.forms import transaction_form
+import dash_bootstrap_components as dbc
+from dash import Dash, dcc, html, callback, Input, Output, State
+from dateutil.relativedelta import relativedelta
+
+from src.components.dashboard import render_summary_cards
+from src.components.modals import render_transaction_modal
 from src.components.tables import render_transactions_table
-from src.database.operations import (
-    create_transaction,
-    get_transactions,
-)
+from src.database.operations import get_transactions, create_transaction
 
-# Configurar logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
 logger = logging.getLogger(__name__)
 
-# Inicializar aplicação Dash com tema Bootstrap
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.SLATE])
+app = Dash(
+    __name__,
+    external_stylesheets=[dbc.themes.FLATLY],
+    suppress_callback_exceptions=True,
+)
 
-app.title = "FinanceTSK"
-
-
-def get_category_options() -> List[Dict[str, Union[str, int]]]:
-    """
-    Fetches all categories from database for dropdown.
-
-    Connects to the database and retrieves all available categories,
-    formatting them for use in a dcc.Dropdown component.
-
-    Returns:
-        List of dicts with 'label' (category name) and 'value' (id).
-        Returns empty list if error occurs.
-
-    Raises:
-        Logs errors but doesn't raise exceptions to prevent app crash.
-    """
-    try:
-        with get_db() as session:
-            categorias = session.query(Categoria).all()
-            opcoes = [
-                {"label": categoria.nome, "value": categoria.id}
-                for categoria in categorias
-            ]
-            logger.info(
-                f"✓ {len(opcoes)} categorias carregadas com sucesso"
-            )
-            return opcoes
-    except Exception as e:
-        logger.error(f"✗ Erro ao carregar categorias: {e}")
-        return []
+app.title = "FinanceTSK - Gestor Financeiro"
 
 
-# Layout da aplicação
 app.layout = dbc.Container(
     [
+        dbc.NavbarSimple(
+            children=[
+                dbc.Nav(
+                    [
+                        dbc.NavLink("Dashboard", href="/", active="exact"),
+                        dbc.NavLink("Receitas", href="/receitas", active="exact"),
+                        dbc.NavLink("Despesas", href="/despesas", active="exact"),
+                        dbc.NavLink("Categorias", href="/categorias", active="exact"),
+                    ],
+                    className="ms-auto",
+                    navbar=True,
+                )
+            ],
+            brand="💰 FinanceTSK",
+            brand_href="/",
+            color="primary",
+            dark=True,
+            className="mb-4",
+        ),
+        dcc.Location(id="url", refresh=False),
+        html.Div(
+            id="dashboard-container",
+            children=render_summary_cards(),
+            className="mb-4",
+        ),
         dbc.Row(
-            dbc.Col(
-                html.H1("FinanceTSK", className="text-center mt-5 mb-5"),
-                width=12,
-            )
+            [
+                dbc.Col(
+                    dbc.Button(
+                        "+ Nova Transação",
+                        id="btn-nova-transacao",
+                        color="primary",
+                        size="lg",
+                        className="mb-3",
+                        style={"width": "100%"},
+                    ),
+                    width=12,
+                )
+            ]
         ),
         dcc.Tabs(
-            id="tabs-tipo-transacao",
-            value="tab-despesas",
+            id="tabs-principal",
+            value="tab-dashboard",
             children=[
-                # ABA DESPESAS
                 dcc.Tab(
-                    label="Despesas",
-                    value="tab-despesas",
-                    children=[
-                        dbc.Container(
-                            [
-                                dbc.Row(
-                                    dbc.Col(
-                                        transaction_form(tipo="despesa"),
-                                        width=12,
-                                        md=8,
-                                        className="mx-auto",
-                                    )
-                                ),
-                                dbc.Alert(
-                                    id="alerta-sucesso-despesa",
-                                    is_open=False,
-                                    duration=4000,
-                                    color="success",
-                                    className="mt-4",
-                                ),
-                                dbc.Alert(
-                                    id="alerta-erro-despesa",
-                                    is_open=False,
-                                    duration=4000,
-                                    color="danger",
-                                    className="mt-4",
-                                ),
-                                html.H4(
-                                    "Últimas Despesas",
-                                    className="mt-4",
-                                ),
-                                html.Div(
-                                    id="tabela-transacoes-despesa",
-                                    className="mt-3",
-                                ),
-                            ],
-                            fluid=True,
-                            className="mt-3",
-                        )
-                    ],
+                    label="📊 Dashboard",
+                    value="tab-dashboard",
                 ),
-                # ABA RECEITAS
                 dcc.Tab(
-                    label="Receitas",
+                    label="💰 Receitas",
                     value="tab-receitas",
-                    children=[
-                        dbc.Container(
-                            [
-                                dbc.Row(
-                                    dbc.Col(
-                                        transaction_form(tipo="receita"),
-                                        width=12,
-                                        md=8,
-                                        className="mx-auto",
-                                    )
-                                ),
-                                dbc.Alert(
-                                    id="alerta-sucesso-receita",
-                                    is_open=False,
-                                    duration=4000,
-                                    color="success",
-                                    className="mt-4",
-                                ),
-                                dbc.Alert(
-                                    id="alerta-erro-receita",
-                                    is_open=False,
-                                    duration=4000,
-                                    color="danger",
-                                    className="mt-4",
-                                ),
-                                html.H4(
-                                    "Últimas Receitas",
-                                    className="mt-4",
-                                ),
-                                html.Div(
-                                    id="tabela-transacoes-receita",
-                                    className="mt-3",
-                                ),
-                            ],
-                            fluid=True,
-                            className="mt-3",
-                        )
-                    ],
+                ),
+                dcc.Tab(
+                    label="💸 Despesas",
+                    value="tab-despesas",
+                ),
+                dcc.Tab(
+                    label="📁 Categorias",
+                    value="tab-categorias",
                 ),
             ],
         ),
-        # Store para sinalizar quando salvar
-        dcc.Store(id="store-despesa-salva"),
-        dcc.Store(id="store-receita-salva"),
+        html.Div(id="conteudo-abas", className="mt-4"),
+        render_transaction_modal(is_open=False),
+        dcc.Store(
+            id="store-data-atual",
+            data={"ano": date.today().year, "mes": date.today().month},
+        ),
+        dcc.Store(
+            id="store-transacao-salva",
+            data=0,
+        ),
+        html.Div(id="dummy-output", style={"display": "none"}),
+        html.Hr(className="mt-5"),
+        html.Footer(
+            "FinanceTSK v1.0 | Gestor Financeiro Pessoal",
+            className="text-center text-muted mt-4 mb-3",
+        ),
     ],
     fluid=True,
-    className="mt-4",
+    className="pt-4",
 )
 
 
-@callback(
-    [
-        Output("alerta-sucesso-despesa", "children"),
-        Output("alerta-sucesso-despesa", "is_open"),
-        Output("alerta-erro-despesa", "children"),
-        Output("alerta-erro-despesa", "is_open"),
-        Output("input-despesa-descricao", "value"),
-        Output("input-despesa-valor", "value"),
-        Output("store-despesa-salva", "data"),
-    ],
-    Input("btn-salvar-despesa", "n_clicks"),
-    [
-        State("input-despesa-descricao", "value"),
-        State("input-despesa-valor", "value"),
-        State("dcc-despesa-data", "date"),
-        State("dcc-despesa-categoria", "value"),
-        State("input-despesa-tags", "value"),
-    ],
-    prevent_initial_call=True,
+@app.callback(
+    Output("conteudo-abas", "children"),
+    Input("tabs-principal", "value"),
+    Input("store-transacao-salva", "data"),
+    prevent_initial_call=False,
+    allow_duplicate=True,
 )
-def salvar_despesa(
-    n_clicks: int,
-    descricao: str,
-    valor: Union[float, None],
-    data_str: str,
-    categoria_id: int,
-    tags: str,
-) -> Tuple[str, bool, str, bool, str, Union[float, None], Dict]:
+def render_tab_content(
+    tab_value: str,
+    store_data: float,
+):
     """
-    Salva nova despesa e exibe alertas apropriados.
+    Renderiza o conteúdo dinâmico das abas.
+
+    Exibe gráficos no Dashboard, tabelas de transações nas abas
+    de Receitas e Despesas. Atualiza quando uma transação é salva
+    (via store-transacao-salva).
 
     Args:
-        n_clicks: Número de cliques no botão salvar.
-        descricao: Descrição da despesa.
-        valor: Valor da despesa.
-        data_str: Data em formato ISO.
-        categoria_id: ID da categoria selecionada.
-        tags: Tags/etiquetas associadas.
+        tab_value: Valor da aba selecionada.
+        store_data: Timestamp da última transação salva (sinal).
 
     Returns:
-        Tupla contendo alertas, campos limpos e sinalização
-        para atualizar tabela.
+        Componente do Dash com o conteúdo da aba selecionada.
     """
-    if n_clicks is None:
-        raise PreventUpdate
-
-    logger.info("Tentando salvar nova despesa...")
-
     try:
-        valor_convertido = float(valor) if valor else 0.0
-        data_objeto = date.fromisoformat(data_str)
+        logger.info(f"📌 Renderizando aba: {tab_value} (signal={store_data})")
 
-        sucesso, mensagem = create_transaction(
-            tipo="despesa",
-            descricao=descricao,
-            valor=valor_convertido,
-            data=data_objeto,
-            categoria_id=categoria_id,
-            tags=tags,
-        )
+        if tab_value == "tab-dashboard":
+            logger.info("✓ Dashboard selecionado")
+            return dbc.Row(
+                dbc.Col(
+                    dbc.Card(
+                        dbc.CardBody(
+                            html.H3(
+                                "📈 Gráficos em breve",
+                                className="text-center text-muted",
+                            )
+                        )
+                    ),
+                    width=12,
+                )
+            )
 
-        if sucesso:
-            logger.info(
-                f"✓ Despesa salva: {descricao} - R$ {valor_convertido}"
+        elif tab_value == "tab-receitas":
+            logger.info("💰 Carregando receitas...")
+            try:
+                transacoes = get_transactions()
+                receitas = [t for t in transacoes if t.get("tipo") == "receita"]
+                logger.info(f"✓ {len(receitas)} receitas carregadas")
+                return render_transactions_table(receitas)
+            except Exception as e:
+                logger.error(f"✗ Erro ao carregar receitas: {e}", exc_info=True)
+                return dbc.Alert(
+                    f"Erro ao carregar receitas: {str(e)}",
+                    color="danger",
+                )
+
+        elif tab_value == "tab-despesas":
+            logger.info("💸 Carregando despesas...")
+            try:
+                transacoes = get_transactions()
+                despesas = [t for t in transacoes if t.get("tipo") == "despesa"]
+                logger.info(f"✓ {len(despesas)} despesas carregadas")
+                return render_transactions_table(despesas)
+            except Exception as e:
+                logger.error(f"✗ Erro ao carregar despesas: {e}", exc_info=True)
+                return dbc.Alert(
+                    f"Erro ao carregar despesas: {str(e)}",
+                    color="danger",
+                )
+
+        elif tab_value == "tab-categorias":
+            logger.info("📁 Categorias selecionadas")
+            return dbc.Row(
+                dbc.Col(
+                    dbc.Card(
+                        dbc.CardBody(
+                            html.H3(
+                                "📁 Categorias em breve",
+                                className="text-center text-muted",
+                            )
+                        )
+                    ),
+                    width=12,
+                )
             )
-            return (
-                mensagem,
-                True,
-                "",
-                False,
-                "",
-                None,
-                {"saved": True},
-            )
+
         else:
-            logger.warning(f"✗ Erro ao salvar despesa: {mensagem}")
-            return (
-                "",
-                False,
-                mensagem,
-                True,
-                descricao,
-                valor,
-                {"saved": False},
-            )
+            logger.warning(f"⚠️ Aba desconhecida: {tab_value}")
+            return html.Div()
 
-    except ValueError as e:
-        mensagem_erro = f"Erro ao converter dados: {str(e)}"
-        logger.error(f"✗ {mensagem_erro}")
-        return (
-            "",
-            False,
-            mensagem_erro,
-            True,
-            descricao,
-            valor,
-            {"saved": False},
-        )
     except Exception as e:
-        mensagem_erro = f"Erro inesperado: {str(e)}"
-        logger.error(f"✗ {mensagem_erro}")
-        return (
-            "",
-            False,
-            mensagem_erro,
-            True,
-            descricao,
-            valor,
-            {"saved": False},
+        logger.error(f"✗ Erro ao renderizar conteúdo das abas: {e}", exc_info=True)
+        return dbc.Alert(
+            f"Erro ao carregar conteúdo: {str(e)}",
+            color="danger",
         )
 
 
-@callback(
-    [
-        Output("alerta-sucesso-receita", "children"),
-        Output("alerta-sucesso-receita", "is_open"),
-        Output("alerta-erro-receita", "children"),
-        Output("alerta-erro-receita", "is_open"),
-        Output("input-receita-descricao", "value"),
-        Output("input-receita-valor", "value"),
-        Output("store-receita-salva", "data"),
-    ],
+@app.callback(
+    Output("alerta-modal", "is_open"),
+    Output("alerta-modal", "children"),
+    Output("modal-transacao", "is_open", allow_duplicate=True),
+    Output("store-transacao-salva", "data"),
     Input("btn-salvar-receita", "n_clicks"),
-    [
-        State("input-receita-descricao", "value"),
-        State("input-receita-valor", "value"),
-        State("dcc-receita-data", "date"),
-        State("dcc-receita-categoria", "value"),
-        State("input-receita-tags", "value"),
-        State("input-receita-pessoa-origem", "value"),
-    ],
+    State("input-receita-valor", "value"),
+    State("input-receita-descricao", "value"),
+    State("dcc-receita-data", "date"),
+    State("dcc-receita-categoria", "value"),
+    State("input-receita-tags", "value"),
+    State("input-receita-pessoa-origem", "value"),
+    State("modal-transacao", "is_open"),
     prevent_initial_call=True,
+    allow_duplicate=True,
 )
-def salvar_receita(
+def save_receita(
     n_clicks: int,
+    valor: float,
     descricao: str,
-    valor: Union[float, None],
-    data_str: str,
+    data: str,
     categoria_id: int,
     tags: str,
     pessoa_origem: str,
-) -> Tuple[str, bool, str, bool, str, Union[float, None], Dict]:
+    modal_is_open: bool,
+):
     """
-    Salva nova receita e exibe alertas apropriados.
+    Salva uma nova receita no banco de dados.
 
     Args:
-        n_clicks: Número de cliques no botão salvar.
-        descricao: Descrição da receita.
+        n_clicks: Número de cliques no botão.
         valor: Valor da receita.
-        data_str: Data em formato ISO.
-        categoria_id: ID da categoria selecionada.
-        tags: Tags/etiquetas associadas.
-        pessoa_origem: Pessoa ou fonte de origem da receita.
+        descricao: Descrição da receita.
+        data: Data em formato YYYY-MM-DD.
+        categoria_id: ID da categoria.
+        tags: Tags separadas por vírgula.
+        pessoa_origem: Pessoa/entidade de origem.
+        modal_is_open: Estado atual do modal.
 
     Returns:
-        Tupla contendo alertas, campos limpos e sinalização
-        para atualizar tabela.
+        Tuple (alerta_aberto, mensagem_alerta, modal_aberto, store_data).
     """
-    if n_clicks is None:
-        raise PreventUpdate
+    import time
 
-    logger.info("Tentando salvar nova receita...")
+    logger.info(f"💾 Salvando receita: {descricao} - R${valor}")
+
+    if not all([valor, descricao, data, categoria_id]):
+        msg_erro = "❌ Preencha todos os campos obrigatórios!"
+        logger.warning(f"⚠️ {msg_erro}")
+        return True, msg_erro, True, 0
 
     try:
-        valor_convertido = float(valor) if valor else 0.0
-        data_objeto = date.fromisoformat(data_str)
+        from datetime import datetime
 
-        sucesso, mensagem = create_transaction(
+        data_obj = datetime.strptime(data, "%Y-%m-%d").date()
+
+        success, message = create_transaction(
             tipo="receita",
             descricao=descricao,
-            valor=valor_convertido,
-            data=data_objeto,
-            categoria_id=categoria_id,
+            valor=float(valor),
+            data=data_obj,
+            categoria_id=int(categoria_id),
             tags=tags,
             pessoa_origem=pessoa_origem,
         )
 
-        if sucesso:
-            logger.info(
-                f"✓ Receita salva: {descricao} - R$ {valor_convertido}"
-            )
-            return (
-                mensagem,
-                True,
-                "",
-                False,
-                "",
-                None,
-                {"saved": True},
-            )
+        if success:
+            logger.info(f"✓ Receita salva com sucesso: {descricao}")
+            timestamp = time.time()
+            logger.info(f"📡 Sinalizando atualização (timestamp={timestamp})")
+            return False, "", False, timestamp
         else:
-            logger.warning(f"✗ Erro ao salvar receita: {mensagem}")
-            return (
-                "",
-                False,
-                mensagem,
-                True,
-                descricao,
-                valor,
-                {"saved": False},
-            )
+            msg_erro = f"❌ Erro: {message}"
+            logger.error(f"✗ {msg_erro}")
+            return True, msg_erro, True, 0
 
-    except ValueError as e:
-        mensagem_erro = f"Erro ao converter dados: {str(e)}"
-        logger.error(f"✗ {mensagem_erro}")
-        return (
-            "",
-            False,
-            mensagem_erro,
-            True,
-            descricao,
-            valor,
-            {"saved": False},
-        )
     except Exception as e:
-        mensagem_erro = f"Erro inesperado: {str(e)}"
-        logger.error(f"✗ {mensagem_erro}")
-        return (
-            "",
-            False,
-            mensagem_erro,
-            True,
-            descricao,
-            valor,
-            {"saved": False},
+        msg_erro = f"❌ Erro ao salvar: {str(e)}"
+        logger.error(f"✗ {msg_erro}", exc_info=True)
+        return True, msg_erro, True, 0
+
+
+@app.callback(
+    Output("alerta-modal", "is_open", allow_duplicate=True),
+    Output("alerta-modal", "children", allow_duplicate=True),
+    Output("modal-transacao", "is_open", allow_duplicate=True),
+    Output("store-transacao-salva", "data", allow_duplicate=True),
+    Input("btn-salvar-despesa", "n_clicks"),
+    State("input-despesa-valor", "value"),
+    State("input-despesa-descricao", "value"),
+    State("dcc-despesa-data", "date"),
+    State("dcc-despesa-categoria", "value"),
+    State("input-despesa-tags", "value"),
+    State("modal-transacao", "is_open"),
+    prevent_initial_call=True,
+    allow_duplicate=True,
+)
+def save_despesa(
+    n_clicks: int,
+    valor: float,
+    descricao: str,
+    data: str,
+    categoria_id: int,
+    tags: str,
+    modal_is_open: bool,
+):
+    """
+    Salva uma nova despesa no banco de dados.
+
+    Args:
+        n_clicks: Número de cliques no botão.
+        valor: Valor da despesa.
+        descricao: Descrição da despesa.
+        data: Data em formato YYYY-MM-DD.
+        categoria_id: ID da categoria.
+        tags: Tags separadas por vírgula.
+        modal_is_open: Estado atual do modal.
+
+    Returns:
+        Tuple (alerta_aberto, mensagem_alerta, modal_aberto, store_data).
+    """
+    import time
+
+    logger.info(f"💾 Salvando despesa: {descricao} - R${valor}")
+
+    if not all([valor, descricao, data, categoria_id]):
+        msg_erro = "❌ Preencha todos os campos obrigatórios!"
+        logger.warning(f"⚠️ {msg_erro}")
+        return True, msg_erro, True, 0
+
+    try:
+        from datetime import datetime
+
+        data_obj = datetime.strptime(data, "%Y-%m-%d").date()
+
+        success, message = create_transaction(
+            tipo="despesa",
+            descricao=descricao,
+            valor=float(valor),
+            data=data_obj,
+            categoria_id=int(categoria_id),
+            tags=tags,
         )
 
+        if success:
+            logger.info(f"✓ Despesa salva com sucesso: {descricao}")
+            timestamp = time.time()
+            logger.info(f"📡 Sinalizando atualização (timestamp={timestamp})")
+            return False, "", False, timestamp
+        else:
+            msg_erro = f"❌ Erro: {message}"
+            logger.error(f"✗ {msg_erro}")
+            return True, msg_erro, True, 0
 
-@callback(
-    Output("tabela-transacoes-despesa", "children"),
-    Input("store-despesa-salva", "data"),
+    except Exception as e:
+        msg_erro = f"❌ Erro ao salvar: {str(e)}"
+        logger.error(f"✗ {msg_erro}", exc_info=True)
+        return True, msg_erro, True, 0
+
+
+@app.callback(
+    Output("dashboard-container", "children"),
+    Input("store-transacao-salva", "data"),
+    prevent_initial_call=False,
+    allow_duplicate=True,
 )
-def atualizar_tabela_despesa(_dados_salvos: Dict) -> Union[dbc.Table, dbc.Alert]:
+def update_dashboard_cards(store_data: float):
     """
-    Atualiza tabela de despesas após salvar.
+    Atualiza cards do dashboard ao salvar transações.
+
+    Recalcula totais de receitas, despesas e saldo consultando
+    o banco de dados atualizado. Acionado pelo store-transacao-salva
+    para garantir serialização.
 
     Args:
-        _dados_salvos: Sinalização de salvamento no store.
+        store_data: Timestamp da última transação salva.
 
     Returns:
-        Tabela renderizada com transações atualizadas.
+        dbc.Row com os cards de resumo atualizados.
     """
-    logger.info("Atualizando tabela de despesas...")
-    todas_transacoes = get_transactions()
-    despesas = [
-        t for t in todas_transacoes if t.get("tipo") == "despesa"
-    ]
-    return render_transactions_table(despesas)
+    logger.info(f"🔄 Atualizando cards do dashboard (signal={store_data})...")
+    cards = render_summary_cards()
+    logger.info("✓ Cards atualizados com sucesso")
+    return cards
 
 
-@callback(
-    Output("tabela-transacoes-receita", "children"),
-    Input("store-receita-salva", "data"),
+@app.callback(
+    Output("modal-transacao", "is_open"),
+    Input("btn-nova-transacao", "n_clicks"),
+    State("modal-transacao", "is_open"),
+    prevent_initial_call=True,
 )
-def atualizar_tabela_receita(_dados_salvos: Dict) -> Union[dbc.Table, dbc.Alert]:
+def toggle_modal_open(n_clicks_nova: int, is_open: bool) -> bool:
     """
-    Atualiza tabela de receitas após salvar.
+    Abre o modal ao clicar em "+ Nova Transação".
 
     Args:
-        _dados_salvos: Sinalização de salvamento no store.
+        n_clicks_nova: Cliques no botão "+ Nova Transação".
+        is_open: Estado atual do modal.
 
     Returns:
-        Tabela renderizada com transações atualizadas.
+        Novo estado booleano do modal.
     """
-    logger.info("Atualizando tabela de receitas...")
-    todas_transacoes = get_transactions()
-    receitas = [
-        t for t in todas_transacoes if t.get("tipo") == "receita"
-    ]
-    return render_transactions_table(receitas)
+    logger.info(f"🔘 Abrindo modal...")
+    return not is_open
 
 
 if __name__ == "__main__":
-    app.run_server(debug=True)
+    app.run_server(debug=True, host="localhost", port=8050)
