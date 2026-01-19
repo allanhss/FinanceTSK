@@ -23,6 +23,26 @@ from sqlalchemy.orm import relationship, Mapped
 
 from src.database.connection import Base
 
+# Formas de pagamento padrão
+FORMAS_PAGAMENTO_PADRAO = [
+    "dinheiro",
+    "pix",
+    "credito",
+    "debito",
+    "transferencia",
+    "boleto",
+]
+
+# Frequências de recorrência padrão
+FREQUENCIAS_RECORRENCIA = [
+    "diaria",
+    "semanal",
+    "quinzenal",
+    "mensal",
+    "trimestral",
+    "anual",
+]
+
 
 class Categoria(Base):
     """
@@ -155,7 +175,8 @@ class Transacao(Base):
     Modelo de Transação (Receita ou Despesa).
 
     Representa movimentações financeiras com classificação por categoria,
-    data e tipo (receita ou despesa).
+    data e tipo (receita ou despesa). Suporta pagamentos parcelados,
+    transações recorrentes e detalhes de forma de pagamento.
 
     Attributes:
         id: Identificador único da transação
@@ -168,6 +189,13 @@ class Transacao(Base):
         pessoa_origem: Pessoa que originou (para receitas)
         observacoes: Observações adicionais
         tags: Tags para classificação adicional
+        forma_pagamento: Forma de pagamento (dinheiro, pix, credito, etc)
+        numero_parcelas: Total de parcelas (default 1)
+        parcela_atual: Número da parcela atual (ex: 1 para 1/10)
+        is_recorrente: Se a transação é recorrente
+        frequencia_recorrencia: Frequência (diaria, semanal, mensal, etc)
+        data_limite_recorrencia: Data limite para repetição da recorrência
+        origem: Origem da transação (para receitas, ex: Banco X)
         created_at: Data/hora de criação
         updated_at: Data/hora da última atualização
     """
@@ -191,6 +219,13 @@ class Transacao(Base):
     pessoa_origem: Optional[str] = Column(String(100), nullable=True)
     observacoes: Optional[str] = Column(Text, nullable=True)
     tags: Optional[str] = Column(String(500), nullable=True)
+    forma_pagamento: Optional[str] = Column(String(50), nullable=True)
+    numero_parcelas: int = Column(Integer, nullable=True, default=1)
+    parcela_atual: Optional[int] = Column(Integer, nullable=True)
+    is_recorrente: bool = Column(Boolean, nullable=True, default=False)
+    frequencia_recorrencia: Optional[str] = Column(String(50), nullable=True)
+    data_limite_recorrencia: Optional[datetime.date] = Column(Date, nullable=True)
+    origem: Optional[str] = Column(String(100), nullable=True)
     created_at: datetime = Column(DateTime, nullable=False, default=datetime.now)
     updated_at: datetime = Column(
         DateTime, nullable=False, default=datetime.now, onupdate=datetime.now
@@ -218,6 +253,13 @@ class Transacao(Base):
         pessoa_origem: Optional[str] = None,
         observacoes: Optional[str] = None,
         tags: Optional[str] = None,
+        forma_pagamento: Optional[str] = None,
+        numero_parcelas: int = 1,
+        parcela_atual: Optional[int] = None,
+        is_recorrente: bool = False,
+        frequencia_recorrencia: Optional[str] = None,
+        data_limite_recorrencia: Optional[datetime.date] = None,
+        origem: Optional[str] = None,
     ) -> None:
         """
         Inicializa uma nova transação com validações.
@@ -231,6 +273,13 @@ class Transacao(Base):
             pessoa_origem: Pessoa que originou (opcional)
             observacoes: Observações adicionais (opcional)
             tags: Tags separadas por vírgula (opcional)
+            forma_pagamento: Forma de pagamento (opcional)
+            numero_parcelas: Total de parcelas (default 1)
+            parcela_atual: Número da parcela atual (opcional)
+            is_recorrente: Se a transação é recorrente (default False)
+            frequencia_recorrencia: Frequência da recorrência (opcional)
+            data_limite_recorrencia: Data limite para recorrência (opcional)
+            origem: Origem da transação (opcional)
 
         Raises:
             ValueError: Se tipo, valor ou data forem inválidos
@@ -243,7 +292,10 @@ class Transacao(Base):
             ...     valor=150.50,
             ...     data=date(2026, 1, 18),
             ...     categoria_id=1,
-            ...     tags="supermercado,alimentação"
+            ...     tags="supermercado,alimentação",
+            ...     forma_pagamento="credito",
+            ...     numero_parcelas=3,
+            ...     parcela_atual=1
             ... )
         """
         if tipo not in self.TIPOS_VALIDOS:
@@ -265,6 +317,13 @@ class Transacao(Base):
         self.pessoa_origem = pessoa_origem
         self.observacoes = observacoes
         self.tags = tags
+        self.forma_pagamento = forma_pagamento
+        self.numero_parcelas = numero_parcelas if numero_parcelas else 1
+        self.parcela_atual = parcela_atual
+        self.is_recorrente = is_recorrente
+        self.frequencia_recorrencia = frequencia_recorrencia
+        self.data_limite_recorrencia = data_limite_recorrencia
+        self.origem = origem
 
     def __repr__(self) -> str:
         """
@@ -279,8 +338,8 @@ class Transacao(Base):
         """
         Converte a transação para dicionário.
 
-        Inclui informações da categoria vinculada. Datas são convertidas
-        para formato ISO.
+        Inclui informações da categoria vinculada, detalhes de pagamento,
+        parcelamento e recorrência. Datas são convertidas para formato ISO.
 
         Returns:
             Dicionário com dados da transação
@@ -297,6 +356,13 @@ class Transacao(Base):
                 'pessoa_origem': None,
                 'observacoes': None,
                 'tags': 'supermercado,alimentação',
+                'forma_pagamento': 'credito',
+                'numero_parcelas': 3,
+                'parcela_atual': 1,
+                'is_recorrente': False,
+                'frequencia_recorrencia': None,
+                'data_limite_recorrencia': None,
+                'origem': None,
                 'created_at': '2026-01-18T10:30:00',
                 'updated_at': '2026-01-18T10:30:00'
             }
@@ -311,6 +377,17 @@ class Transacao(Base):
             "pessoa_origem": self.pessoa_origem,
             "observacoes": self.observacoes,
             "tags": self.tags,
+            "forma_pagamento": self.forma_pagamento,
+            "numero_parcelas": self.numero_parcelas,
+            "parcela_atual": self.parcela_atual,
+            "is_recorrente": self.is_recorrente,
+            "frequencia_recorrencia": self.frequencia_recorrencia,
+            "data_limite_recorrencia": (
+                self.data_limite_recorrencia.isoformat()
+                if self.data_limite_recorrencia
+                else None
+            ),
+            "origem": self.origem,
             "created_at": (self.created_at.isoformat() if self.created_at else None),
             "updated_at": (self.updated_at.isoformat() if self.updated_at else None),
         }

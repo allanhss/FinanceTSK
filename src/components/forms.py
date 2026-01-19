@@ -18,6 +18,8 @@ def transaction_form(tipo: str) -> dbc.Card:
     """
     Cria um formulário dinâmico para entrada de receitas ou despesas.
 
+    Suporta campos opcionais para parcelamento, forma de pagamento e recorrência.
+
     Args:
         tipo: Tipo de transação - 'receita' ou 'despesa'.
 
@@ -88,54 +90,88 @@ def transaction_form(tipo: str) -> dbc.Card:
         className="mb-3",
     )
 
-    # Row 3: Categoria e Tags
-    linha_categoria_tags = dbc.Row(
-        [
-            dbc.Col(
-                [
-                    dbc.Label("Categoria", html_for=f"dcc-{tipo}-categoria"),
-                    dcc.Dropdown(
-                        id=f"dcc-{tipo}-categoria",
-                        options=opcoes_categoria,
-                        placeholder="Selecione uma categoria",
-                    ),
-                ],
-                md=6,
-            ),
-            dbc.Col(
-                [
-                    dbc.Label("Tags", html_for=f"input-{tipo}-tags"),
-                    dbc.Input(
-                        id=f"input-{tipo}-tags",
-                        type="text",
-                        placeholder="Ex: mercado, jantar (separadas por vírgula)",
-                    ),
-                ],
-                md=6,
-            ),
-        ],
+    # Row 3: Categoria
+    linha_categoria = dbc.Row(
+        dbc.Col(
+            [
+                dbc.Label("Categoria", html_for=f"dcc-{tipo}-categoria"),
+                dcc.Dropdown(
+                    id=f"dcc-{tipo}-categoria",
+                    options=opcoes_categoria,
+                    placeholder="Selecione uma categoria",
+                ),
+            ],
+            md=12,
+        ),
         className="mb-3",
     )
 
-    # Row 4: Pessoa Origem (apenas para receita)
     linhas_formulario = [
         linha_valor_data,
         linha_descricao,
-        linha_categoria_tags,
+        linha_categoria,
     ]
 
-    if tipo == "receita":
+    # Row 4: Específicos por tipo (Despesa vs Receita)
+    if tipo == "despesa":
+        # Forma de Pagamento e Número de Parcelas para Despesas
+        linha_pagamento_parcelas = dbc.Row(
+            [
+                dbc.Col(
+                    [
+                        dbc.Label(
+                            "Forma de Pagamento",
+                            html_for=f"select-{tipo}-pagamento",
+                        ),
+                        dcc.Dropdown(
+                            id=f"select-{tipo}-pagamento",
+                            options=[
+                                {"label": "Dinheiro", "value": "dinheiro"},
+                                {"label": "Pix", "value": "pix"},
+                                {"label": "Crédito", "value": "credito"},
+                                {"label": "Débito", "value": "debito"},
+                                {"label": "Transferência", "value": "transferencia"},
+                                {"label": "Boleto", "value": "boleto"},
+                            ],
+                            placeholder="Selecione a forma",
+                        ),
+                    ],
+                    md=6,
+                ),
+                dbc.Col(
+                    [
+                        dbc.Label(
+                            "Número de Parcelas",
+                            html_for=f"input-{tipo}-parcelas",
+                        ),
+                        dbc.Input(
+                            id=f"input-{tipo}-parcelas",
+                            type="number",
+                            placeholder="Qtd Parcelas (ex: 10)",
+                            min=1,
+                            value=1,
+                        ),
+                    ],
+                    md=6,
+                ),
+            ],
+            className="mb-3",
+        )
+        linhas_formulario.append(linha_pagamento_parcelas)
+
+    elif tipo == "receita":
+        # Pessoa Origem para Receitas
         linha_pessoa_origem = dbc.Row(
             dbc.Col(
                 [
                     dbc.Label(
                         "Pessoa Origem",
-                        html_for=f"input-{tipo}-pessoa-origem",
+                        html_for=f"input-{tipo}-origem",
                     ),
                     dbc.Input(
-                        id=f"input-{tipo}-pessoa-origem",
+                        id=f"input-{tipo}-origem",
                         type="text",
-                        placeholder="Ex: Chefe, Cliente",
+                        placeholder="Ex: Chefe, Cliente, Banco X",
                     ),
                 ],
                 md=12,
@@ -144,7 +180,45 @@ def transaction_form(tipo: str) -> dbc.Card:
         )
         linhas_formulario.append(linha_pessoa_origem)
 
-    # Row 5: Botão Salvar
+    # Row 5: Recorrência (para ambos)
+    linha_recorrencia = dbc.Row(
+        [
+            dbc.Col(
+                [
+                    dbc.Checklist(
+                        id=f"check-{tipo}-recorrente",
+                        options=[{"label": " É recorrente?", "value": 1}],
+                        value=[],
+                        switch=True,
+                    ),
+                ],
+                md=4,
+            ),
+            dbc.Col(
+                [
+                    dbc.Label(
+                        "Frequência",
+                        html_for=f"select-{tipo}-frequencia",
+                    ),
+                    dcc.Dropdown(
+                        id=f"select-{tipo}-frequencia",
+                        options=[
+                            {"label": "Mensal", "value": "mensal"},
+                            {"label": "Quinzenal", "value": "quinzenal"},
+                            {"label": "Semanal", "value": "semanal"},
+                        ],
+                        placeholder="Selecione a frequência",
+                        disabled=True,
+                    ),
+                ],
+                md=8,
+            ),
+        ],
+        className="mb-3",
+    )
+    linhas_formulario.append(linha_recorrencia)
+
+    # Row 6: Botão Salvar
     linha_botao = dbc.Row(
         dbc.Col(
             dbc.Button(

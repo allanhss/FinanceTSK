@@ -11,7 +11,9 @@ if str(project_root) not in sys.path:
 
 import logging
 from typing import List, Tuple
-from src.database.connection import SessionLocal
+from sqlalchemy import inspect
+
+from src.database.connection import SessionLocal, init_database, engine
 from src.database.models import Categoria
 
 # Configurar logging
@@ -88,5 +90,36 @@ def seed_database() -> None:
         logger.info("Sessão encerrada")
 
 
+def reset_database() -> None:
+    """
+    Reseta o banco de dados removendo a versão antiga e criando um novo
+    com o schema atualizado. Útil após mudanças estruturais nos modelos.
+    """
+    logger.info("🗑️  Removendo banco de dados antigo...")
+
+    db_path = Path.home() / "OneDrive" / "FinanceTSK" / "finance.db"
+    if db_path.exists():
+        db_path.unlink()
+        logger.info(f"✓ Banco removido: {db_path}")
+    else:
+        logger.info(f"⊘ Banco não encontrado em {db_path}")
+
+    logger.info("\n🔨 Recriando banco de dados com novo schema...")
+    init_database()
+    logger.info("✓ Banco criado com sucesso")
+
+    logger.info("\n📋 Verificando colunas da tabela transacoes...")
+    try:
+        inspector = inspect(engine)
+        colunas = inspector.get_columns("transacoes")
+        for col in colunas:
+            logger.info(f"  - {col['name']}: {col['type']}")
+    except Exception as e:
+        logger.warning(f"Não foi possível inspecionar tabela: {e}")
+
+    logger.info("\n✅ Banco de dados recriado com sucesso!")
+
+
 if __name__ == "__main__":
+    reset_database()
     seed_database()

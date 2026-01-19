@@ -218,8 +218,9 @@ def render_tab_content(
     State("input-receita-descricao", "value"),
     State("dcc-receita-data", "date"),
     State("dcc-receita-categoria", "value"),
-    State("input-receita-tags", "value"),
-    State("input-receita-pessoa-origem", "value"),
+    State("input-receita-origem", "value"),
+    State("check-receita-recorrente", "value"),
+    State("select-receita-frequencia", "value"),
     State("modal-transacao", "is_open"),
     prevent_initial_call=True,
     allow_duplicate=True,
@@ -230,12 +231,15 @@ def save_receita(
     descricao: str,
     data: str,
     categoria_id: int,
-    tags: str,
     pessoa_origem: str,
+    is_recorrente: List,
+    frequencia_recorrencia: str,
     modal_is_open: bool,
 ):
     """
     Salva uma nova receita no banco de dados.
+
+    Suporta recorrência.
 
     Args:
         n_clicks: Número de cliques no botão.
@@ -243,8 +247,9 @@ def save_receita(
         descricao: Descrição da receita.
         data: Data em formato YYYY-MM-DD.
         categoria_id: ID da categoria.
-        tags: Tags separadas por vírgula.
         pessoa_origem: Pessoa/entidade de origem.
+        is_recorrente: Lista com valor 1 se recorrente, vazia se não.
+        frequencia_recorrencia: Frequência (mensal, quinzenal, semanal).
         modal_is_open: Estado atual do modal.
 
     Returns:
@@ -263,6 +268,7 @@ def save_receita(
         from datetime import datetime
 
         data_obj = datetime.strptime(data, "%Y-%m-%d").date()
+        eh_recorrente = len(is_recorrente) > 0 if is_recorrente else False
 
         success, message = create_transaction(
             tipo="receita",
@@ -270,8 +276,9 @@ def save_receita(
             valor=float(valor),
             data=data_obj,
             categoria_id=int(categoria_id),
-            tags=tags,
             pessoa_origem=pessoa_origem,
+            is_recorrente=eh_recorrente,
+            frequencia_recorrencia=frequencia_recorrencia if eh_recorrente else None,
         )
 
         if success:
@@ -300,7 +307,10 @@ def save_receita(
     State("input-despesa-descricao", "value"),
     State("dcc-despesa-data", "date"),
     State("dcc-despesa-categoria", "value"),
-    State("input-despesa-tags", "value"),
+    State("select-despesa-pagamento", "value"),
+    State("input-despesa-parcelas", "value"),
+    State("check-despesa-recorrente", "value"),
+    State("select-despesa-frequencia", "value"),
     State("modal-transacao", "is_open"),
     prevent_initial_call=True,
     allow_duplicate=True,
@@ -311,11 +321,16 @@ def save_despesa(
     descricao: str,
     data: str,
     categoria_id: int,
-    tags: str,
+    forma_pagamento: str,
+    numero_parcelas: int,
+    is_recorrente: List,
+    frequencia_recorrencia: str,
     modal_is_open: bool,
 ):
     """
     Salva uma nova despesa no banco de dados.
+
+    Suporta parcelamento, forma de pagamento e recorrência.
 
     Args:
         n_clicks: Número de cliques no botão.
@@ -323,7 +338,10 @@ def save_despesa(
         descricao: Descrição da despesa.
         data: Data em formato YYYY-MM-DD.
         categoria_id: ID da categoria.
-        tags: Tags separadas por vírgula.
+        forma_pagamento: Forma de pagamento (dinheiro, pix, credito, etc).
+        numero_parcelas: Número de parcelas (default 1).
+        is_recorrente: Lista com valor 1 se recorrente, vazia se não.
+        frequencia_recorrencia: Frequência (mensal, quinzenal, semanal).
         modal_is_open: Estado atual do modal.
 
     Returns:
@@ -342,6 +360,10 @@ def save_despesa(
         from datetime import datetime
 
         data_obj = datetime.strptime(data, "%Y-%m-%d").date()
+        eh_recorrente = len(is_recorrente) > 0 if is_recorrente else False
+        num_parcelas = (
+            int(numero_parcelas) if numero_parcelas and numero_parcelas > 0 else 1
+        )
 
         success, message = create_transaction(
             tipo="despesa",
@@ -349,7 +371,10 @@ def save_despesa(
             valor=float(valor),
             data=data_obj,
             categoria_id=int(categoria_id),
-            tags=tags,
+            forma_pagamento=forma_pagamento,
+            numero_parcelas=num_parcelas,
+            is_recorrente=eh_recorrente,
+            frequencia_recorrencia=frequencia_recorrencia if eh_recorrente else None,
         )
 
         if success:
@@ -413,6 +438,80 @@ def toggle_modal_open(n_clicks_nova: int, is_open: bool) -> bool:
     """
     logger.info(f"🔘 Abrindo modal...")
     return not is_open
+
+
+@app.callback(
+    Output("input-despesa-parcelas", "style"),
+    Input("select-despesa-pagamento", "value"),
+    prevent_initial_call=True,
+)
+def toggle_parcelas_visibility(forma_pagamento: str) -> Dict:
+    """
+    Controla visibilidade do campo de parcelas baseado na forma de pagamento.
+
+    Mostra o campo de parcelas apenas quando a forma de pagamento é 'crédito'.
+
+    Args:
+        forma_pagamento: Forma de pagamento selecionada.
+
+    Returns:
+        Dict com propriedade 'display' para CSS.
+    """
+    if forma_pagamento and forma_pagamento.lower() == "credito":
+        logger.debug("💳 Mostrando campo de parcelas (Crédito selecionado)")
+        return {"display": "block"}
+    logger.debug("🚫 Ocultando campo de parcelas")
+    return {"display": "none"}
+
+
+@app.callback(
+    Output("select-despesa-frequencia", "disabled"),
+    Input("check-despesa-recorrente", "value"),
+    prevent_initial_call=True,
+)
+def toggle_despesa_frequencia(is_recorrente: List) -> bool:
+    """
+    Controla ativação do campo de frequência para despesas.
+
+    Ativa o dropdown de frequência apenas quando a recorrência está marcada.
+
+    Args:
+        is_recorrente: Lista vazia ou com valor 1 (Checklist switch).
+
+    Returns:
+        True para desabilitar, False para habilitar.
+    """
+    habilitado = len(is_recorrente) > 0 if is_recorrente else False
+    if habilitado:
+        logger.debug("📅 Habilitando frequência de recorrência (Despesa)")
+    else:
+        logger.debug("🔒 Desabilitando frequência de recorrência (Despesa)")
+    return not habilitado
+
+
+@app.callback(
+    Output("select-receita-frequencia", "disabled"),
+    Input("check-receita-recorrente", "value"),
+    prevent_initial_call=True,
+)
+def toggle_receita_frequencia(is_recorrente: List) -> bool:
+    """
+    Controla ativação do campo de frequência para receitas.
+
+    Ativa o dropdown de frequência apenas quando a recorrência está marcada.
+
+    Args:
+        is_recorrente: Lista vazia ou com valor 1 (Checklist switch).
+
+    Returns:
+        True para desabilitar, False para habilitar.
+    """
+    habilitado = len(is_recorrente) > 0 if is_recorrente else False
+    if habilitado:
+        logger.debug("📅 Habilitando frequência de recorrência (Receita)")
+    else:
+        logger.debug("🔒 Desabilitando frequência de recorrência (Receita)")
+    return not habilitado
 
 
 if __name__ == "__main__":
