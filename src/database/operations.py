@@ -3,10 +3,245 @@ from datetime import date, timedelta
 from dateutil.relativedelta import relativedelta
 from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from src.database.connection import get_db
 from src.database.models import Categoria, Transacao
 
 logger = logging.getLogger(__name__)
+
+
+# ===== FUNÇÕES DE GERENCIAMENTO DE CATEGORIAS =====
+
+
+def create_category(
+    nome: str, tipo: str, cor: str = "#6B7280", icone: Optional[str] = None
+) -> Tuple[bool, str]:
+    """
+    Creates a new category for transactions.
+
+    Args:
+        nome: Category name (e.g., 'Alimentação').
+        tipo: Category type ('receita' or 'despesa').
+        cor: Color in hex format #RRGGBB (default: #6B7280).
+        icone: Optional emoji or icon name.
+
+    Returns:
+        Tuple with (success: bool, message: str).
+
+    Example:
+        >>> create_category(
+        ...     nome='Salário',
+        ...     tipo='receita',
+        ...     cor='#22C55E',
+        ...     icone='💰'
+        ... )
+        (True, 'Categoria criada com sucesso.')
+    """
+    try:
+        logger.debug(f"🔄 Tentando criar categoria: {nome} ({tipo})")
+
+        # Validação de tipo
+        if tipo not in Categoria.TIPOS_VALIDOS:
+            logger.error(f"❌ Tipo inválido: {tipo}")
+            return False, "Tipo deve ser 'receita' ou 'despesa'."
+
+        with get_db() as session:
+            try:
+                # Criar nova categoria
+                logger.debug(f"📝 Criando objeto Categoria: {nome}")
+                nova_categoria = Categoria(nome=nome, tipo=tipo, cor=cor, icone=icone)
+                session.add(nova_categoria)
+                logger.debug(f"➕ Categoria adicionada à sessão")
+
+                session.commit()
+                logger.info(f"✅ Categoria criada com sucesso: {nome} ({tipo})")
+                return True, "Categoria criada com sucesso."
+
+            except IntegrityError as ie:
+                session.rollback()
+                logger.warning(
+                    f"⚠️ Erro de integridade (duplicata): {nome} ({tipo}) - {ie}"
+                )
+                return False, "Categoria com esse nome e tipo já existe."
+
+            except ValueError as ve:
+                session.rollback()
+                logger.error(f"❌ Erro de validação: {ve}")
+                return False, str(ve)
+
+            except Exception as e:
+                session.rollback()
+                logger.error(
+                    f"❌ Erro inesperado ao criar categoria: {e}", exc_info=True
+                )
+                raise
+
+    except Exception as e:
+        logger.error(f"❌ Erro ao criar categoria: {e}", exc_info=True)
+        return False, "Erro ao salvar categoria. Tente novamente."
+
+
+def get_categories(tipo: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    Retrieves categories, optionally filtered by type.
+
+    Args:
+        tipo: Optional type filter ('receita' or 'despesa').
+
+    Returns:
+        List of category dictionaries, ordered by name.
+
+    Example:
+        >>> get_categories(tipo='despesa')
+        [
+            {'id': 1, 'nome': 'Alimentação', 'tipo': 'despesa', ...},
+            ...
+        ]
+    """
+    try:
+        with get_db() as session:
+            query = session.query(Categoria)
+
+            if tipo:
+                query = query.filter(Categoria.tipo == tipo)
+
+            categorias = query.order_by(Categoria.nome).all()
+
+            lista_categorias = [cat.to_dict() for cat in categorias]
+            logger.info(
+                f"Recuperadas {len(lista_categorias)} categorias."
+                + (f" (tipo: {tipo})" if tipo else "")
+            )
+            return lista_categorias
+
+    except Exception as e:
+        logger.error(f"Erro ao recuperar categorias: {e}")
+        return []
+
+
+def delete_category(category_id: int) -> Tuple[bool, str]:
+    """
+    Deletes a category by ID.
+
+    Note: Due to cascade delete, associated transactions will also
+    be deleted if the foreign key cascade is configured.
+
+    Args:
+        category_id: ID of the category to delete.
+
+    Returns:
+        Tuple with (success: bool, message: str).
+
+    Example:
+        >>> delete_category(5)
+        (True, 'Categoria removida com sucesso.')
+    """
+    try:
+        with get_db() as session:
+            try:
+                categoria = (
+                    session.query(Categoria).filter(Categoria.id == category_id).first()
+                )
+
+                if not categoria:
+                    return False, "Categoria não encontrada."
+
+                nome_categoria = categoria.nome
+                session.delete(categoria)
+                session.commit()
+
+                logger.info(f"Categoria removida: {nome_categoria} (ID: {category_id})")
+                return True, "Categoria removida com sucesso."
+
+            except Exception as e:
+                session.rollback()
+                logger.error(f"Erro ao remover categoria: {e}")
+                raise
+
+    except Exception as e:
+        logger.error(f"Erro ao deletar categoria: {e}")
+        return False, "Erro ao remover categoria. Tente novamente."
+
+
+def initialize_default_categories() -> Tuple[bool, str]:
+    """
+    Initializes default categories if database is empty.
+
+    Creates standard income and expense categories if no categories
+    exist in the database.
+
+    Returns:
+        Tuple with (success: bool, message: str).
+
+    Example:
+        >>> initialize_default_categories()
+        (True, 'Categorias padrão inicializadas: 12 categorias criadas.')
+    """
+    # Padrão de Receitas
+    CATEGORIAS_RECEITA = [
+        {"nome": "Salário", "cor": "#10B981", "icone": "💼"},
+        {"nome": "Mesada", "cor": "#06B6D4", "icone": "🎁"},
+        {"nome": "Vendas", "cor": "#F59E0B", "icone": "🛒"},
+        {"nome": "Investimentos", "cor": "#8B5CF6", "icone": "📈"},
+        {"nome": "Outros", "cor": "#6B7280", "icone": "❓"},
+    ]
+
+    # Padrão de Despesas
+    CATEGORIAS_DESPESA = [
+        {"nome": "Alimentação", "cor": "#22C55E", "icone": "🍔"},
+        {"nome": "Moradia", "cor": "#EF4444", "icone": "🏠"},
+        {"nome": "Transporte", "cor": "#0EA5E9", "icone": "🚗"},
+        {"nome": "Lazer", "cor": "#A855F7", "icone": "🎬"},
+        {"nome": "Saúde", "cor": "#FB923C", "icone": "⚕️"},
+        {"nome": "Educação", "cor": "#06B6D4", "icone": "📚"},
+        {"nome": "Outros", "cor": "#6B7280", "icone": "❓"},
+    ]
+
+    try:
+        with get_db() as session:
+            # Verificar se já existem categorias
+            total_categorias = session.query(Categoria).count()
+
+            if total_categorias > 0:
+                logger.info("Categorias já existem no banco. Inicialização abortada.")
+                return True, "Categorias já foram inicializadas anteriormente."
+
+            # Criar categorias de receita
+            for cat_info in CATEGORIAS_RECEITA:
+                nova_categoria = Categoria(
+                    nome=cat_info["nome"],
+                    tipo=Categoria.TIPO_RECEITA,
+                    cor=cat_info["cor"],
+                    icone=cat_info["icone"],
+                )
+                session.add(nova_categoria)
+
+            # Criar categorias de despesa
+            for cat_info in CATEGORIAS_DESPESA:
+                nova_categoria = Categoria(
+                    nome=cat_info["nome"],
+                    tipo=Categoria.TIPO_DESPESA,
+                    cor=cat_info["cor"],
+                    icone=cat_info["icone"],
+                )
+                session.add(nova_categoria)
+
+            session.commit()
+
+            total_criadas = len(CATEGORIAS_RECEITA) + len(CATEGORIAS_DESPESA)
+
+            logger.info(
+                f"Categorias padrão inicializadas: "
+                f"{total_criadas} categorias criadas."
+            )
+            return (
+                True,
+                f"Categorias padrão inicializadas: {total_criadas} categorias criadas.",
+            )
+
+    except Exception as e:
+        logger.error(f"Erro ao inicializar categorias padrão: {e}")
+        return False, "Erro ao inicializar categorias padrão. Tente novamente."
 
 
 def create_transaction(
@@ -67,20 +302,27 @@ def create_transaction(
         # Creates 3 transactions: 100 each, on 18/01, 18/02, 18/03
     """
     try:
+        logger.debug(f"🔄 Tentando criar transação: {tipo} - R$ {valor} - {descricao}")
+
         # Validação de tipo
         if tipo not in ["receita", "despesa"]:
+            logger.error(f"❌ Tipo inválido: {tipo}")
             return False, "Tipo deve ser 'receita' ou 'despesa'."
 
         # Validação de valor
         if valor <= 0:
+            logger.error(f"❌ Valor inválido: {valor}")
             return False, "Valor deve ser maior que zero."
 
         # Validação de descrição
         if not descricao or len(descricao.strip()) == 0:
+            logger.error("❌ Descrição vazia")
             return False, "Descrição não pode estar vazia."
 
+        logger.debug(f"📝 Validações OK. Abrindo sessão do banco...")
         with get_db() as session:
             try:
+                logger.debug(f"🔍 Verificando categoria ID: {categoria_id}")
                 # Validar se categoria existe
                 categoria = (
                     session.query(Categoria)
@@ -88,7 +330,10 @@ def create_transaction(
                     .first()
                 )
                 if not categoria:
+                    logger.error(f"❌ Categoria não encontrada: ID {categoria_id}")
                     return False, "Categoria não encontrada."
+
+                logger.debug(f"✓ Categoria encontrada: {categoria.nome}")
 
                 # ===== LÓGICA DE PARCELAMENTO =====
                 if numero_parcelas > 1:
@@ -169,7 +414,7 @@ def create_transaction(
 
                         session.commit()
                         logger.info(
-                            f"Transação recorrente criada: {tipo} - R$ {valor} "
+                            f"✅ Transação recorrente criada: {tipo} - R$ {valor} "
                             f"mensalmente até {data_fim}"
                         )
                         return True, "Transação recorrente registrada com sucesso."
@@ -199,18 +444,22 @@ def create_transaction(
                     origem=origem,
                 )
                 session.add(transacao)
+                logger.debug(f"➕ Transação adicionada à sessão")
                 session.commit()
-
-                logger.info(f"Transação criada: {tipo} - R$ {valor} em {data}")
+                logger.info(
+                    f"✅ Transação criada com sucesso: {tipo} - R$ {valor} em {data}"
+                )
                 return True, "Transação registrada com sucesso."
 
             except Exception as e:
                 session.rollback()
-                logger.error(f"Erro durante criação de transação: {e}")
+                logger.error(
+                    f"❌ Erro durante criação de transação: {e}", exc_info=True
+                )
                 raise
 
     except Exception as e:
-        logger.error(f"Erro ao criar transação: {e}")
+        logger.error(f"❌ Erro ao criar transação: {e}", exc_info=True)
         return False, "Erro ao salvar transação. Tente novamente."
 
 
@@ -248,25 +497,36 @@ def get_transactions(
         return []
 
 
-def get_category_options() -> List[Dict[str, Any]]:
+def get_category_options(tipo: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Retrieves all categories formatted for Dash dcc.Dropdown.
+
+    Args:
+        tipo: Optional type filter ('receita' or 'despesa').
 
     Returns:
         List of dicts with 'label' (icon + name) and 'value' (id).
 
     Example:
-        >>> get_category_options()
+        >>> get_category_options(tipo='despesa')
         [{'label': '🍔 Alimentação', 'value': 1}, ...]
     """
     try:
         with get_db() as session:
-            categorias = session.query(Categoria).order_by(Categoria.nome).all()
+            query = session.query(Categoria)
+
+            if tipo:
+                query = query.filter(Categoria.tipo == tipo)
+
+            categorias = query.order_by(Categoria.nome).all()
 
             opcoes = [
                 {"label": f"{c.icone} {c.nome}", "value": c.id} for c in categorias
             ]
-            logger.info(f"Recuperadas {len(opcoes)} categorias.")
+            logger.info(
+                f"Recuperadas {len(opcoes)} categorias."
+                + (f" (tipo: {tipo})" if tipo else "")
+            )
             return opcoes
 
     except Exception as e:

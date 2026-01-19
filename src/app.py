@@ -1,19 +1,22 @@
 import logging
+import time
 from datetime import date
 from typing import Dict, List
 
 import dash_bootstrap_components as dbc
 from dash import Dash, dcc, html, Input, Output, State
 
-from src.components.dashboard import render_summary_cards
-from src.components.modals import render_transaction_modal
-from src.components.tables import render_transactions_table
-from src.components.cash_flow import render_cash_flow_table
+from src.database.connection import init_database
 from src.database.operations import (
     get_transactions,
     create_transaction,
     get_cash_flow_data,
+    get_categories,
 )
+from src.components.dashboard import render_summary_cards
+from src.components.modals import render_transaction_modal
+from src.components.tables import render_transactions_table
+from src.components.cash_flow import render_cash_flow_table
 
 logger = logging.getLogger(__name__)
 
@@ -167,32 +170,33 @@ app.layout = dbc.Container(
     Output("cash-flow-container", "children"),
     Input("select-past", "value"),
     Input("select-future", "value"),
-    Input("btn-salvar-despesa", "n_clicks"),
-    Input("btn-salvar-receita", "n_clicks"),
+    Input("store-transacao-salva", "data"),
     prevent_initial_call=False,
     allow_duplicate=True,
 )
 def update_cash_flow(
-    months_past: int, months_future: int, n_clicks_despesa: int, n_clicks_receita: int
+    months_past: int, months_future: int, store_data: float
 ) -> dbc.Card:
     """
     Atualiza a tabela de Fluxo de Caixa baseado nos controles de horizonte temporal.
 
     Recarrega os dados sempre que o usuário muda os seletores de meses passados/futuros
-    ou quando salva uma nova transação.
+    ou quando uma transação é salva com sucesso (via store-transacao-salva).
+
+    O padrão Store/Signal elimina a condição de corrida onde o callback de leitura
+    disparava antes do término da gravação no banco.
 
     Args:
         months_past: Número de meses para trás (padrão 3).
         months_future: Número de meses para frente (padrão 6).
-        n_clicks_despesa: Cliques no botão salvar despesa (sinal de atualização).
-        n_clicks_receita: Cliques no botão salvar receita (sinal de atualização).
+        store_data: Timestamp da última transação salva (sinal de sincronização).
 
     Returns:
         dbc.Card com a tabela de fluxo de caixa atualizada.
     """
     logger.info(
         f"🔄 Atualizando Fluxo de Caixa: {months_past} meses passados, "
-        f"{months_future} meses futuros"
+        f"{months_future} meses futuros (signal={store_data})"
     )
 
     try:
@@ -293,20 +297,67 @@ def render_tab_content(
                 )
 
         elif tab_value == "tab-categorias":
-            logger.info("📁 Categorias selecionadas")
-            return dbc.Row(
-                dbc.Col(
-                    dbc.Card(
-                        dbc.CardBody(
-                            html.H3(
-                                "📁 Categorias em breve",
-                                className="text-center text-muted",
-                            )
-                        )
-                    ),
-                    width=12,
+            logger.info("📁 Carregando categorias...")
+            try:
+                # Carregar categorias separadas por tipo
+                receitas = get_categories(tipo="receita")
+                despesas = get_categories(tipo="despesa")
+                logger.info(
+                    f"✓ {len(receitas)} receitas e "
+                    f"{len(despesas)} despesas carregadas"
                 )
-            )
+
+                # TODO: Integrar render_category_manager quando disponível
+                # from src.components.categories import render_category_manager
+                # return render_category_manager(receitas, despesas)
+
+                # Por enquanto, exibir lista simples
+                return dbc.Container(
+                    [
+                        dbc.Row(
+                            [
+                                dbc.Col(
+                                    [
+                                        html.H4("💰 Receitas", className="mb-3"),
+                                        dbc.ListGroup(
+                                            [
+                                                dbc.ListGroupItem(
+                                                    f"{cat.get('icone')} {cat.get('nome')}"
+                                                )
+                                                for cat in receitas
+                                            ],
+                                            flush=True,
+                                        ),
+                                    ],
+                                    md=6,
+                                ),
+                                dbc.Col(
+                                    [
+                                        html.H4("💸 Despesas", className="mb-3"),
+                                        dbc.ListGroup(
+                                            [
+                                                dbc.ListGroupItem(
+                                                    f"{cat.get('icone')} {cat.get('nome')}"
+                                                )
+                                                for cat in despesas
+                                            ],
+                                            flush=True,
+                                        ),
+                                    ],
+                                    md=6,
+                                ),
+                            ],
+                            className="mt-4",
+                        )
+                    ],
+                    fluid=True,
+                )
+            except Exception as e:
+                logger.error(f"✗ Erro ao carregar categorias: {e}", exc_info=True)
+                return dbc.Alert(
+                    f"Erro ao carregar categorias: {str(e)}",
+                    color="danger",
+                )
 
         else:
             logger.warning(f"⚠️ Aba desconhecida: {tab_value}")
@@ -351,7 +402,8 @@ def save_receita(
     """
     Salva uma nova receita no banco de dados.
 
-    Suporta recorrência.
+    Suporta recorrência. Atualiza store-transacao-salva ao salvar com sucesso,
+    sinalizando a atualização dos componentes dependentes (Fluxo de Caixa, Abas).
 
     Args:
         n_clicks: Número de cliques no botão.
@@ -365,9 +417,8 @@ def save_receita(
         modal_is_open: Estado atual do modal.
 
     Returns:
-        Tuple (alerta_aberto, mensagem_alerta, modal_aberto, store_data).
+        Tuple (alerta_aberto, mensagem_alerta, modal_aberto, timestamp).
     """
-    import time
 
     logger.info(f"💾 Salvando receita: {descricao} - R${valor}")
 
@@ -442,7 +493,9 @@ def save_despesa(
     """
     Salva uma nova despesa no banco de dados.
 
-    Suporta parcelamento, forma de pagamento e recorrência.
+    Suporta parcelamento, forma de pagamento e recorrência. Atualiza
+    store-transacao-salva ao salvar com sucesso, sinalizando a atualização
+    dos componentes dependentes (Fluxo de Caixa, Abas).
 
     Args:
         n_clicks: Número de cliques no botão.
@@ -457,9 +510,8 @@ def save_despesa(
         modal_is_open: Estado atual do modal.
 
     Returns:
-        Tuple (alerta_aberto, mensagem_alerta, modal_aberto, store_data).
+        Tuple (alerta_aberto, mensagem_alerta, modal_aberto, timestamp).
     """
-    import time
 
     logger.info(f"💾 Salvando despesa: {descricao} - R${valor}")
 
@@ -647,4 +699,37 @@ def toggle_receita_frequencia(is_recorrente: List) -> bool:
 
 
 if __name__ == "__main__":
-    app.run_server(debug=True, host="localhost", port=8050)
+    # ===== INICIALIZAÇÃO AUTOMÁTICA DO BANCO DE DADOS =====
+    print("\n" + "=" * 70)
+    print("🚀 INICIANDO FINANCETSK")
+    print("=" * 70)
+
+    logger.info("🔧 Inicializando banco de dados...")
+    try:
+        logger.info("📁 Verificando estrutura de diretórios...")
+        init_database()
+        logger.info("✅ Banco de dados pronto!")
+        print("✅ Banco de dados inicializado com sucesso")
+
+    except Exception as e:
+        logger.error(f"❌ ERRO CRÍTICO ao inicializar banco: {e}", exc_info=True)
+        print(f"\n❌ ERRO CRÍTICO ao inicializar banco:")
+        print(f"   {e}\n")
+        import traceback
+
+        traceback.print_exc()
+        print("\n" + "=" * 70)
+        raise
+
+    # ===== INICIAR SERVIDOR =====
+    print("=" * 70)
+    logger.info("🚀 Iniciando servidor FinanceTSK em http://localhost:8050")
+    print("🚀 Servidor rodando em: http://localhost:8050")
+    print("=" * 70 + "\n")
+
+    try:
+        app.run_server(debug=True, host="localhost", port=8050)
+    except Exception as e:
+        logger.error(f"❌ Erro ao iniciar servidor: {e}", exc_info=True)
+        print(f"\n❌ Erro ao iniciar servidor: {e}\n")
+        raise

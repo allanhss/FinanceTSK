@@ -50,6 +50,24 @@ Ao editar arquivos existentes (especialmente via Chat Lateral com referência `@
     * ❌ "Aqui está o código atualizado..." (Não use).
     * ✅ "Arquivo atualizado. Resumo das mudanças: ..." (Use).
 
+## 📂 Organização de Arquivos - REGRA CRÍTICA
+
+### Localização de Arquivos por Tipo:
+- **Testes unitários**: `tests/test_*.py` (NUNCA na raiz)
+- **Testes de integração**: `tests/integration_*.py` (NUNCA na raiz)
+- **Scripts de validação**: `tests/validation_*.py` (NUNCA na raiz)
+- **Código-fonte**: `src/**/*.py`
+- **Configuração**: `data/config.json`, `.env`, `requirements.txt` (raiz)
+- **Documentação**: `docs/` ou `.md` na raiz
+
+### ⚠️ OBRIGATÓRIO:
+**TODOS os arquivos de teste DEVEM ser criados em `tests/`, NUNCA na raiz do projeto.**
+
+Se o usuário pedir um teste ou validação, SEMPRE criar em:
+- `tests/test_novo_modulo.py` para testes pytest
+- `tests/validation_novo_modulo.py` para scripts de validação
+- NUNCA criar na raiz como `test_novo.py` ou `validation_novo.py`
+
 ---
 
 ## 🛠️ Padrões Técnicos Específicos

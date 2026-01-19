@@ -21,20 +21,49 @@ load_dotenv()
 # Configurar logger
 logger = logging.getLogger(__name__)
 
-# Obter caminho dos dados do arquivo .env
-DATA_PATH = os.getenv("DATA_PATH", str(Path.home() / "OneDrive" / "FinanceTSK"))
+# ===== DEFINIÇÃO ROBUSTA DO CAMINHO DO BANCO DE DADOS =====
+# Obter caminho da raiz do projeto (diretório acima de src/)
+PROJETO_RAIZ = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
+logger.info(f"📁 Raiz do projeto: {PROJETO_RAIZ}")
 
-# Garantir que o diretório de dados existe
-diretorio_dados = Path(DATA_PATH)
-diretorio_dados.mkdir(parents=True, exist_ok=True)
+# Diretório de dados
+DIRETORIO_DADOS = os.path.join(PROJETO_RAIZ, "data")
 
-# URL do banco de dados SQLite
-DATABASE_URL = f"sqlite:///{diretorio_dados / 'finance.db'}"
+# Criar diretório se não existir
+try:
+    os.makedirs(DIRETORIO_DADOS, exist_ok=True)
+    logger.info(f"📁 Diretório de dados criado/verificado: {DIRETORIO_DADOS}")
+except Exception as e:
+    logger.error(f"❌ Erro ao criar diretório de dados: {e}")
+    raise
+
+# Caminho completo do banco de dados
+CAMINHO_BANCO = os.path.join(DIRETORIO_DADOS, "finance.db")
+logger.info(f"🗄️  Banco de dados será salvo em: {CAMINHO_BANCO}")
+
+# Alternativa: Ler DATA_PATH do .env se existir
+DATA_PATH_ENV = os.getenv("DATA_PATH", None)
+if DATA_PATH_ENV:
+    logger.debug(f"DATA_PATH encontrado no .env: {DATA_PATH_ENV}")
+
+# URL do banco de dados SQLite (com caminho absoluto)
+DATABASE_URL = f"sqlite:///{CAMINHO_BANCO}"
+logger.debug(f"DATABASE_URL: {DATABASE_URL}")
 
 # Criar engine SQLAlchemy
-engine: Engine = create_engine(
-    DATABASE_URL, connect_args={"check_same_thread": False}, echo=False, future=True
-)
+try:
+    engine: Engine = create_engine(
+        DATABASE_URL,
+        connect_args={"check_same_thread": False},
+        echo=False,
+        future=True,
+    )
+    logger.info("✅ Engine SQLAlchemy criado com sucesso")
+except Exception as e:
+    logger.error(f"❌ Erro ao criar engine: {e}")
+    raise
 
 # Configurar sessionmaker
 SessionLocal = sessionmaker(
@@ -85,6 +114,9 @@ def init_database() -> None:
     não existam. Deve ser chamada uma vez na inicialização da
     aplicação.
 
+    Após criar as tabelas, executa a inicialização de categorias
+    padrão se o banco estiver vazio.
+
     Raises:
         Exception: Se a criação do banco falhar
 
@@ -93,8 +125,19 @@ def init_database() -> None:
         >>> logger.info("Banco de dados inicializado com sucesso")
     """
     try:
+        # Importar modelos para registrá-los no Base
+        from src.database import models  # noqa: F401
+
         Base.metadata.create_all(bind=engine)
         logger.info(f"Banco de dados inicializado com sucesso em {DATABASE_URL}")
+
+        # Auto-inicializar categorias padrão se banco estiver vazio
+        from src.database.operations import initialize_default_categories
+
+        success, msg = initialize_default_categories()
+        if success:
+            logger.info(msg)
+
     except Exception as e:
         logger.error(f"Falha ao inicializar banco de dados: {e}")
         raise

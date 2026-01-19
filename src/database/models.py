@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import Dict, Any, List, Optional
 
 from sqlalchemy import Column, Integer, String, DateTime, Float, Date
-from sqlalchemy import ForeignKey, Text, Boolean, Index
+from sqlalchemy import ForeignKey, Text, Boolean, Index, UniqueConstraint
 from sqlalchemy.orm import relationship, Mapped
 
 from src.database.connection import Base
@@ -50,11 +50,12 @@ class Categoria(Base):
 
     Representa categorias como Alimentação, Transporte, Moradia, etc.
     Cada categoria possui uma cor e ícone opcionais para identificação
-    visual na interface.
+    visual na interface. Suporta separação entre Receitas e Despesas.
 
     Attributes:
         id: Identificador único da categoria
-        nome: Nome da categoria (único)
+        nome: Nome da categoria
+        tipo: Tipo de categoria ('receita' ou 'despesa')
         cor: Cor em formato hexadecimal (#RRGGBB)
         icone: Emoji ou nome do ícone para exibição
         created_at: Data/hora de criação
@@ -63,9 +64,15 @@ class Categoria(Base):
 
     __tablename__ = "categorias"
 
+    # Tipos válidos de categoria
+    TIPO_RECEITA = "receita"
+    TIPO_DESPESA = "despesa"
+    TIPOS_VALIDOS = [TIPO_RECEITA, TIPO_DESPESA]
+
     # Colunas
     id: int = Column(Integer, primary_key=True, autoincrement=True)
-    nome: str = Column(String(100), unique=True, nullable=False, index=True)
+    nome: str = Column(String(100), nullable=False, index=True)
+    tipo: str = Column(String(10), nullable=False, index=True)
     cor: str = Column(String(7), nullable=False, default="#6B7280")
     icone: Optional[str] = Column(String(50), nullable=True)
     created_at: datetime = Column(DateTime, nullable=False, default=datetime.now)
@@ -80,27 +87,35 @@ class Categoria(Base):
 
     # Índices adicionais
     __table_args__ = (
-        Index("idx_categoria_nome", "nome"),
+        UniqueConstraint("nome", "tipo", name="uq_categoria_nome_tipo"),
+        Index("idx_categoria_tipo", "tipo"),
         Index("idx_categoria_created_at", "created_at"),
     )
 
     def __init__(
-        self, nome: str, cor: str = "#6B7280", icone: Optional[str] = None
+        self,
+        nome: str,
+        tipo: str,
+        cor: str = "#6B7280",
+        icone: Optional[str] = None,
     ) -> None:
         """
-        Inicializa uma nova categoria com validação de cor hex.
+        Inicializa uma nova categoria com validação de cor hex e tipo.
 
         Args:
             nome: Nome da categoria (obrigatório)
+            tipo: Tipo de categoria ('receita' ou 'despesa')
             cor: Cor em formato hex #RRGGBB (padrão: #6B7280)
             icone: Emoji ou nome do ícone (opcional)
 
         Raises:
-            ValueError: Se o formato da cor não for hex válido
+            ValueError: Se o formato da cor não for hex válido ou tipo
+                inválido
 
         Example:
             >>> cat = Categoria(
             ...     nome="Alimentação",
+            ...     tipo="despesa",
             ...     cor="#22C55E",
             ...     icone="🍔"
             ... )
@@ -108,11 +123,15 @@ class Categoria(Base):
         if not nome or not nome.strip():
             raise ValueError("Nome da categoria não pode estar vazio")
 
+        if tipo not in self.TIPOS_VALIDOS:
+            raise ValueError(f"Tipo inválido '{tipo}'. Use 'receita' ou 'despesa'.")
+
         # Validar formato de cor hexadecimal
         if not self._validar_cor_hex(cor):
             raise ValueError(f"Cor inválida '{cor}'. Use formato hex: #RRGGBB")
 
         self.nome = nome.strip()
+        self.tipo = tipo
         self.cor = cor
         self.icone = icone
 
@@ -135,9 +154,10 @@ class Categoria(Base):
         Representação em string legível da categoria.
 
         Returns:
-            String no formato: Categoria(id=1, nome='Alimentação')
+            String no formato: Categoria(id=1, nome='Alimentação',
+                tipo='despesa')
         """
-        return f"Categoria(id={self.id}, nome='{self.nome}')"
+        return f"Categoria(id={self.id}, nome='{self.nome}', tipo='{self.tipo}')"
 
     def to_dict(self) -> Dict[str, Any]:
         """
@@ -154,6 +174,7 @@ class Categoria(Base):
             {
                 'id': 1,
                 'nome': 'Alimentação',
+                'tipo': 'despesa',
                 'cor': '#22C55E',
                 'icone': '🍔',
                 'created_at': '2026-01-18T10:30:00',
@@ -163,6 +184,7 @@ class Categoria(Base):
         return {
             "id": self.id,
             "nome": self.nome,
+            "tipo": self.tipo,
             "cor": self.cor,
             "icone": self.icone,
             "created_at": (self.created_at.isoformat() if self.created_at else None),
@@ -407,24 +429,38 @@ if __name__ == "__main__":
 
         print("\n📝 Testando criação de categoria...")
         with get_db() as session:
-            # 1. LIMPEZA: Tenta apagar a categoria de teste antiga se ela existir
+            # 1. LIMPEZA: Tenta apagar as categorias de teste antiga se elas existirem
             # Isso garante que o teste possa rodar múltiplas vezes
-            session.execute(delete(Categoria).where(Categoria.nome == "Teste"))
+            session.query(Categoria).filter(Categoria.nome == "Teste Receita").delete()
+            session.query(Categoria).filter(Categoria.nome == "Teste Despesa").delete()
             session.commit()  # Confirma a exclusão
 
             # 2. CRIAÇÃO: Agora podemos criar sem medo de duplicidade
-            cat_teste = Categoria(nome="Teste", cor="#FF5733", icone="🧪")
-            session.add(cat_teste)
+            cat_receita = Categoria(
+                nome="Teste Receita",
+                tipo="receita",
+                cor="#22C55E",
+                icone="💰",
+            )
+            cat_despesa = Categoria(
+                nome="Teste Despesa",
+                tipo="despesa",
+                cor="#EF4444",
+                icone="💸",
+            )
+            session.add(cat_receita)
+            session.add(cat_despesa)
             session.commit()  # Commit para salvar e gerar o ID
 
-            print(f"✓ Categoria criada: {cat_teste}")
+            print(f"✓ Categoria Receita criada: {cat_receita}")
+            print(f"✓ Categoria Despesa criada: {cat_despesa}")
 
             # 3. LEITURA: Buscar para confirmar
-            stmt = select(Categoria).where(Categoria.nome == "Teste")
+            stmt = select(Categoria).where(Categoria.nome == "Teste Receita")
             cat_recuperada = session.execute(stmt).scalar_one_or_none()
 
             if cat_recuperada:
-                print(f"\n✓ Categoria recuperada: {cat_recuperada.to_dict()}")
+                print(f"\n✓ Categoria recuperada: " f"{cat_recuperada.to_dict()}")
             else:
                 print("✗ Erro: Categoria não encontrada.")
 
