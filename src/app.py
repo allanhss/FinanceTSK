@@ -1,10 +1,11 @@
 import logging
 import time
 from datetime import date
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import dash_bootstrap_components as dbc
-from dash import Dash, dcc, html, Input, Output, State
+from dash import Dash, dcc, html, Input, Output, State, MATCH, ALL, ctx
+from dash.exceptions import PreventUpdate
 
 from src.database.connection import init_database
 from src.database.operations import (
@@ -12,11 +13,14 @@ from src.database.operations import (
     create_transaction,
     get_cash_flow_data,
     get_categories,
+    create_category,
+    delete_category,
 )
 from src.components.dashboard import render_summary_cards
 from src.components.modals import render_transaction_modal
 from src.components.tables import render_transactions_table
 from src.components.cash_flow import render_cash_flow_table
+from src.components.category_manager import render_category_manager
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +158,10 @@ app.layout = dbc.Container(
             id="store-transacao-salva",
             data=0,
         ),
+        dcc.Store(
+            id="store-categorias-atualizadas",
+            data=0,
+        ),
         html.Div(id="dummy-output", style={"display": "none"}),
         html.Hr(className="mt-5"),
         html.Footer(
@@ -228,29 +236,35 @@ def update_cash_flow(
     Output("conteudo-abas", "children"),
     Input("tabs-principal", "value"),
     Input("store-transacao-salva", "data"),
+    Input("store-categorias-atualizadas", "data"),
     prevent_initial_call=False,
     allow_duplicate=True,
 )
 def render_tab_content(
     tab_value: str,
-    store_data: float,
+    store_transacao: float,
+    store_categorias: float,
 ):
     """
     Renderiza o conteúdo dinâmico das abas.
 
     Exibe gráficos no Dashboard, tabelas de transações nas abas
     de Receitas e Despesas. Atualiza quando uma transação é salva
-    (via store-transacao-salva).
+    (via store-transacao-salva) ou categorias são modificadas
+    (via store-categorias-atualizadas).
 
     Args:
         tab_value: Valor da aba selecionada.
-        store_data: Timestamp da última transação salva (sinal).
+        store_transacao: Timestamp da última transação salva (sinal).
+        store_categorias: Timestamp da última atualização de categorias (sinal).
 
     Returns:
         Componente do Dash com o conteúdo da aba selecionada.
     """
     try:
-        logger.info(f"📌 Renderizando aba: {tab_value} (signal={store_data})")
+        logger.info(
+            f"📌 Renderizando aba: {tab_value} (transacao_signal={store_transacao}, cat_signal={store_categorias})"
+        )
 
         if tab_value == "tab-dashboard":
             logger.info("✓ Dashboard selecionado")
@@ -307,51 +321,9 @@ def render_tab_content(
                     f"{len(despesas)} despesas carregadas"
                 )
 
-                # TODO: Integrar render_category_manager quando disponível
-                # from src.components.categories import render_category_manager
-                # return render_category_manager(receitas, despesas)
+                # Usar componente render_category_manager
+                return render_category_manager(receitas, despesas)
 
-                # Por enquanto, exibir lista simples
-                return dbc.Container(
-                    [
-                        dbc.Row(
-                            [
-                                dbc.Col(
-                                    [
-                                        html.H4("💰 Receitas", className="mb-3"),
-                                        dbc.ListGroup(
-                                            [
-                                                dbc.ListGroupItem(
-                                                    f"{cat.get('icone')} {cat.get('nome')}"
-                                                )
-                                                for cat in receitas
-                                            ],
-                                            flush=True,
-                                        ),
-                                    ],
-                                    md=6,
-                                ),
-                                dbc.Col(
-                                    [
-                                        html.H4("💸 Despesas", className="mb-3"),
-                                        dbc.ListGroup(
-                                            [
-                                                dbc.ListGroupItem(
-                                                    f"{cat.get('icone')} {cat.get('nome')}"
-                                                )
-                                                for cat in despesas
-                                            ],
-                                            flush=True,
-                                        ),
-                                    ],
-                                    md=6,
-                                ),
-                            ],
-                            className="mt-4",
-                        )
-                    ],
-                    fluid=True,
-                )
             except Exception as e:
                 logger.error(f"✗ Erro ao carregar categorias: {e}", exc_info=True)
                 return dbc.Alert(
@@ -369,6 +341,313 @@ def render_tab_content(
             f"Erro ao carregar conteúdo: {str(e)}",
             color="danger",
         )
+
+
+# ===== CALLBACKS PARA EMOJI PICKER (RECEITA) =====
+@app.callback(
+    Output("popover-icon-receita", "is_open"),
+    Output("btn-icon-receita", "children"),
+    Input("btn-icon-receita", "n_clicks"),
+    Input("radio-icon-receita", "value"),
+    State("popover-icon-receita", "is_open"),
+    prevent_initial_call=True,
+)
+def toggle_emoji_picker_receita(
+    n_clicks_btn: Optional[int],
+    radio_value: Optional[str],
+    is_open: bool,
+):
+    """
+    Gerencia abertura/fechamento do Popover de ícones (Receita).
+
+    Quando o botão é clicado, alterna is_open.
+    Quando um ícone é selecionado no RadioItems, fecha o popover e atualiza o botão.
+
+    Args:
+        n_clicks_btn: Cliques no botão seletor.
+        radio_value: Valor selecionado no RadioItems.
+        is_open: Estado atual do popover.
+
+    Returns:
+        (is_open atualizado, texto do botão atualizado)
+    """
+    if not ctx.triggered:
+        raise PreventUpdate
+
+    triggered_id = ctx.triggered_id
+    logger.debug(f"🎯 Emoji Picker Receita acionado: {triggered_id}")
+
+    # Se foi clicado no botão, alterna is_open
+    if triggered_id == "btn-icon-receita":
+        return (not is_open, ctx.states["btn-icon-receita.children"])
+
+    # Se foi selecionado um ícone no RadioItems, fecha e atualiza botão
+    elif triggered_id == "radio-icon-receita" and radio_value:
+        logger.info(f"✅ Ícone selecionado (Receita): {radio_value}")
+        return (False, radio_value)
+
+    raise PreventUpdate
+
+
+# ===== CALLBACKS PARA EMOJI PICKER (DESPESA) =====
+@app.callback(
+    Output("popover-icon-despesa", "is_open"),
+    Output("btn-icon-despesa", "children"),
+    Input("btn-icon-despesa", "n_clicks"),
+    Input("radio-icon-despesa", "value"),
+    State("popover-icon-despesa", "is_open"),
+    prevent_initial_call=True,
+)
+def toggle_emoji_picker_despesa(
+    n_clicks_btn: Optional[int],
+    radio_value: Optional[str],
+    is_open: bool,
+):
+    """
+    Gerencia abertura/fechamento do Popover de ícones (Despesa).
+
+    Quando o botão é clicado, alterna is_open.
+    Quando um ícone é selecionado no RadioItems, fecha o popover e atualiza o botão.
+
+    Args:
+        n_clicks_btn: Cliques no botão seletor.
+        radio_value: Valor selecionado no RadioItems.
+        is_open: Estado atual do popover.
+
+    Returns:
+        (is_open atualizado, texto do botão atualizado)
+    """
+    if not ctx.triggered:
+        raise PreventUpdate
+
+    triggered_id = ctx.triggered_id
+    logger.debug(f"🎯 Emoji Picker Despesa acionado: {triggered_id}")
+
+    # Se foi clicado no botão, alterna is_open
+    if triggered_id == "btn-icon-despesa":
+        return (not is_open, ctx.states["btn-icon-despesa.children"])
+
+    # Se foi selecionado um ícone no RadioItems, fecha e atualiza botão
+    elif triggered_id == "radio-icon-despesa" and radio_value:
+        logger.info(f"✅ Ícone selecionado (Despesa): {radio_value}")
+        return (False, radio_value)
+
+    raise PreventUpdate
+
+
+@app.callback(
+    Output("store-categorias-atualizadas", "data"),
+    Output("input-cat-receita", "value"),
+    Output("input-cat-despesa", "value"),
+    Output("radio-icon-receita", "value"),
+    Output("radio-icon-despesa", "value"),
+    Input("btn-add-cat-receita", "n_clicks"),
+    Input("btn-add-cat-despesa", "n_clicks"),
+    Input({"type": "btn-delete-category", "index": ALL}, "n_clicks"),
+    State("input-cat-receita", "value"),
+    State("input-cat-despesa", "value"),
+    State("radio-icon-receita", "value"),
+    State("radio-icon-despesa", "value"),
+    prevent_initial_call=True,
+)
+def manage_categories(
+    n_clicks_add_receita: Optional[int],
+    n_clicks_add_despesa: Optional[int],
+    n_clicks_delete: List,
+    input_receita: str,
+    input_despesa: str,
+    icon_receita: Optional[str],
+    icon_despesa: Optional[str],
+):
+    """
+    Gerencia adição e remoção de categorias (apenas banco de dados).
+
+    Não renderiza conteúdo, apenas atualiza o banco e sinaliza via Store.
+    O callback render_tab_content escuta o Store e recarrega a aba.
+
+    Identifica qual botão foi clicado usando ctx.triggered_id:
+    - Se foi btn-add-cat-receita: adiciona categoria de receita com ícone
+    - Se foi btn-add-cat-despesa: adiciona categoria de despesa com ícone
+    - Se foi btn-delete-category: remove categoria pelo ID
+
+    Args:
+        n_clicks_add_receita: Cliques no botão adicionar receita.
+        n_clicks_add_despesa: Cliques no botão adicionar despesa.
+        n_clicks_delete: Lista de cliques em botões de exclusão.
+        input_receita: Valor do input de receita.
+        input_despesa: Valor do input de despesa.
+        icon_receita: Ícone selecionado para receita.
+        icon_despesa: Ícone selecionado para despesa.
+
+    Returns:
+        (timestamp para Store, input_receita limpo, input_despesa limpo,
+         icon_receita limpo, icon_despesa limpo)
+    """
+    # Verificar se realmente há um trigger válido
+    if not ctx.triggered or not ctx.triggered_id:
+        logger.debug("⏭️  Nenhum trigger - PreventUpdate")
+        raise PreventUpdate
+
+    triggered_id = ctx.triggered_id
+    triggered_prop = ctx.triggered[0].get("prop_id") if ctx.triggered else None
+
+    # Se foi disparado por um Input que não é um clique, ignorar
+    if (
+        triggered_prop
+        and "n_clicks" not in triggered_prop
+        and "index" not in triggered_prop
+    ):
+        logger.debug(f"⏭️  Não é clique: {triggered_prop} - PreventUpdate")
+        raise PreventUpdate
+
+    # Verificações de ID
+    if isinstance(triggered_id, dict):
+        if triggered_id.get("type") != "btn-delete-category":
+            logger.debug(f"⏭️  ID desconhecido: {triggered_id}")
+            raise PreventUpdate
+    elif triggered_id not in ["btn-add-cat-receita", "btn-add-cat-despesa"]:
+        logger.debug(f"⏭️  ID desconhecido: {triggered_id}")
+        raise PreventUpdate
+
+    try:
+        # Ação: Adicionar categoria de receita
+        if triggered_id == "btn-add-cat-receita":
+            if not input_receita or not input_receita.strip():
+                logger.warning("⚠️ Tentativa de adicionar categoria vazia")
+                raise PreventUpdate
+
+            if not icon_receita:
+                logger.warning("⚠️ Nenhum ícone selecionado para receita")
+                raise PreventUpdate
+
+            logger.info(
+                f"➕ Adicionando categoria de receita: {input_receita} "
+                f"(ícone: {icon_receita})"
+            )
+            success, msg = create_category(
+                input_receita, tipo="receita", icone=icon_receita
+            )
+
+            if not success:
+                logger.warning(f"⚠️ Erro ao adicionar receita: {msg}")
+                raise PreventUpdate
+
+            logger.info(f"✅ Categoria de receita criada: {msg}")
+
+        # Ação: Adicionar categoria de despesa
+        elif triggered_id == "btn-add-cat-despesa":
+            if not input_despesa or not input_despesa.strip():
+                logger.warning("⚠️ Tentativa de adicionar categoria vazia")
+                raise PreventUpdate
+
+            if not icon_despesa:
+                logger.warning("⚠️ Nenhum ícone selecionado para despesa")
+                raise PreventUpdate
+
+            logger.info(
+                f"➕ Adicionando categoria de despesa: {input_despesa} "
+                f"(ícone: {icon_despesa})"
+            )
+            success, msg = create_category(
+                input_despesa, tipo="despesa", icone=icon_despesa
+            )
+
+            if not success:
+                logger.warning(f"⚠️ Erro ao adicionar despesa: {msg}")
+                raise PreventUpdate
+
+            logger.info(f"✅ Categoria de despesa criada: {msg}")
+
+        # Ação: Remover categoria
+        elif (
+            isinstance(triggered_id, dict)
+            and triggered_id.get("type") == "btn-delete-category"
+        ):
+            category_id = triggered_id.get("index")
+            logger.info(f"🗑️  Removendo categoria ID: {category_id}")
+            success, msg = delete_category(category_id)
+            logger.info(f"✓ Resultado: {msg}")
+
+        # Retornar: (timestamp para Store, inputs/dropdowns limpos)
+        return (
+            time.time(),  # Sinaliza que houve mudança
+            "",  # Limpar input-cat-receita
+            "",  # Limpar input-cat-despesa
+            None,  # Limpar dropdown-icon-receita
+            None,  # Limpar dropdown-icon-despesa
+        )
+
+    except PreventUpdate:
+        raise
+    except Exception as e:
+        logger.error(f"✗ Erro ao gerenciar categorias: {e}", exc_info=True)
+        raise PreventUpdate
+        # Retornar: (alerta_erro, input_receita, input_despesa, icon_receita, icon_despesa)
+        return (
+            dbc.Alert(
+                f"Erro ao gerenciar categorias: {str(e)}",
+                color="danger",
+            ),
+            "",  # Limpar input
+            "",  # Limpar input
+            None,  # Limpar icon
+            None,  # Limpar icon
+        )
+
+
+@app.callback(
+    Output("dcc-receita-categoria", "options"),
+    Output("dcc-despesa-categoria", "options"),
+    Input("modal-transacao", "is_open"),
+    Input("store-transacao-salva", "data"),
+    prevent_initial_call=False,
+    allow_duplicate=True,
+)
+def update_category_dropdowns(modal_is_open: bool, store_data: float):
+    """
+    Atualiza as opções dos dropdowns de categorias no modal.
+
+    Carrega categorias do banco toda vez que o modal abre ou
+    uma transação é salva (sinalizando possível nova categoria).
+
+    Args:
+        modal_is_open: Se o modal está aberto.
+        store_data: Timestamp da última transação salva (sinal).
+
+    Returns:
+        Tuple (opcoes_receita, opcoes_despesa).
+    """
+    logger.debug(
+        f"🔄 Atualizando dropdowns de categorias (modal_open={modal_is_open}, signal={store_data})"
+    )
+
+    try:
+        receitas = get_categories(tipo="receita")
+        despesas = get_categories(tipo="despesa")
+
+        opcoes_receita = [
+            {
+                "label": f"{cat.get('icone', '')} {cat.get('nome')}",
+                "value": cat.get("id"),
+            }
+            for cat in receitas
+        ]
+        opcoes_despesa = [
+            {
+                "label": f"{cat.get('icone', '')} {cat.get('nome')}",
+                "value": cat.get("id"),
+            }
+            for cat in despesas
+        ]
+
+        logger.debug(
+            f"✓ Dropdowns atualizados: {len(opcoes_receita)} receitas, {len(opcoes_despesa)} despesas"
+        )
+        return opcoes_receita, opcoes_despesa
+
+    except Exception as e:
+        logger.error(f"✗ Erro ao atualizar dropdowns: {e}", exc_info=True)
+        return [], []
 
 
 @app.callback(

@@ -28,6 +28,10 @@ def create_category(
     Returns:
         Tuple with (success: bool, message: str).
 
+    Raises:
+        ValueError: If icon already exists for the given type and a
+            different category, or if name and icon are both in use.
+
     Example:
         >>> create_category(
         ...     nome='Salário',
@@ -47,6 +51,28 @@ def create_category(
 
         with get_db() as session:
             try:
+                # Validar unicidade de ícone por tipo
+                if icone:
+                    categoria_com_icone = (
+                        session.query(Categoria)
+                        .filter(
+                            Categoria.tipo == tipo,
+                            Categoria.icone == icone,
+                            Categoria.nome != nome,
+                        )
+                        .first()
+                    )
+                    if categoria_com_icone:
+                        logger.warning(
+                            f"⚠️ Ícone '{icone}' já existe para tipo '{tipo}' "
+                            f"na categoria '{categoria_com_icone.nome}'"
+                        )
+                        return (
+                            False,
+                            f"Ícone '{icone}' já está em uso nesta categoria. "
+                            f"Escolha outro ícone.",
+                        )
+
                 # Criar nova categoria
                 logger.debug(f"📝 Criando objeto Categoria: {nome}")
                 nova_categoria = Categoria(nome=nome, tipo=tipo, cor=cor, icone=icone)
