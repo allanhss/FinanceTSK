@@ -4,7 +4,7 @@ from datetime import date
 from typing import Dict, List, Optional
 
 import dash_bootstrap_components as dbc
-from dash import Dash, dcc, html, Input, Output, State, MATCH, ALL, ctx
+from dash import Dash, dcc, html, Input, Output, State, MATCH, ALL, ctx, no_update
 from dash.exceptions import PreventUpdate
 
 from src.database.connection import init_database
@@ -15,12 +15,13 @@ from src.database.operations import (
     get_categories,
     create_category,
     delete_category,
+    get_used_icons,
 )
 from src.components.dashboard import render_summary_cards
 from src.components.modals import render_transaction_modal
 from src.components.tables import render_transactions_table
 from src.components.cash_flow import render_cash_flow_table
-from src.components.category_manager import render_category_manager
+from src.components.category_manager import render_category_manager, EMOJI_OPTIONS
 
 logger = logging.getLogger(__name__)
 
@@ -347,45 +348,66 @@ def render_tab_content(
 @app.callback(
     Output("popover-icon-receita", "is_open"),
     Output("btn-icon-receita", "children"),
+    Output("radio-icon-receita", "options"),
     Input("btn-icon-receita", "n_clicks"),
     Input("radio-icon-receita", "value"),
     State("popover-icon-receita", "is_open"),
+    State("btn-icon-receita", "children"),
     prevent_initial_call=True,
 )
 def toggle_emoji_picker_receita(
     n_clicks_btn: Optional[int],
     radio_value: Optional[str],
     is_open: bool,
-):
+    btn_icon_current: str,
+) -> tuple:
     """
-    Gerencia abertura/fechamento do Popover de ícones (Receita).
+    Gerencia abertura/fechamento e filtro dinamico do Popover de icones (Receita).
 
-    Quando o botão é clicado, alterna is_open.
-    Quando um ícone é selecionado no RadioItems, fecha o popover e atualiza o botão.
+    Logica Hibrida:
+    - Clique no botao: Deixa o navegador (legacy) gerenciar abertura/fechamento.
+      Retorna no_update para is_open. Python gerencia apenas o filtro de opcoes.
+    - Selecao de icone: Força o fechamento (False) e atualiza o botao.
 
     Args:
-        n_clicks_btn: Cliques no botão seletor.
+        n_clicks_btn: Cliques no botao seletor.
         radio_value: Valor selecionado no RadioItems.
         is_open: Estado atual do popover.
+        btn_icon_current: Icone atual exibido no botao.
 
     Returns:
-        (is_open atualizado, texto do botão atualizado)
+        Tupla: (is_open, btn_children, radio_options)
     """
     if not ctx.triggered:
         raise PreventUpdate
 
     triggered_id = ctx.triggered_id
-    logger.debug(f"🎯 Emoji Picker Receita acionado: {triggered_id}")
+    logger.debug(f"Emoji Picker Receita acionado: {triggered_id}")
 
-    # Se foi clicado no botão, alterna is_open
+    # Cenario 1: Clique no botao
+    # Deixa o navegador (legacy) gerenciar abertura/fechamento
+    # Python apenas filtra as opcoes de icones
     if triggered_id == "btn-icon-receita":
-        return (not is_open, ctx.states["btn-icon-receita.children"])
+        # Recuperar icones ja usados e filtrar disponiveis
+        icones_usados = get_used_icons("receita")
+        opcoes_disponiveis = [
+            {"label": e, "value": e} for e in EMOJI_OPTIONS if e not in icones_usados
+        ]
+        logger.info(
+            f"Popover Receita alternado. "
+            f"Icones disponiveis: {len(opcoes_disponiveis)}/{len(EMOJI_OPTIONS)}"
+        )
+        # Retorna no_update para is_open: deixa o navegador controlar
+        return (no_update, no_update, opcoes_disponiveis)
 
-    # Se foi selecionado um ícone no RadioItems, fecha e atualiza botão
+    # Cenario 2: Selecao no RadioItems
+    # Força o fechamento e atualiza o botao com o novo icone
     elif triggered_id == "radio-icon-receita" and radio_value:
-        logger.info(f"✅ Ícone selecionado (Receita): {radio_value}")
-        return (False, radio_value)
+        logger.info(f"Icone selecionado (Receita): {radio_value}")
+        # Fecha o popover (False), atualiza o botao, nao atualiza options
+        return (False, radio_value, no_update)
 
+    # Cenario 3: Sem trigger valido
     raise PreventUpdate
 
 
@@ -393,45 +415,66 @@ def toggle_emoji_picker_receita(
 @app.callback(
     Output("popover-icon-despesa", "is_open"),
     Output("btn-icon-despesa", "children"),
+    Output("radio-icon-despesa", "options"),
     Input("btn-icon-despesa", "n_clicks"),
     Input("radio-icon-despesa", "value"),
     State("popover-icon-despesa", "is_open"),
+    State("btn-icon-despesa", "children"),
     prevent_initial_call=True,
 )
 def toggle_emoji_picker_despesa(
     n_clicks_btn: Optional[int],
     radio_value: Optional[str],
     is_open: bool,
-):
+    btn_icon_current: str,
+) -> tuple:
     """
-    Gerencia abertura/fechamento do Popover de ícones (Despesa).
+    Gerencia abertura/fechamento e filtro dinamico do Popover de icones (Despesa).
 
-    Quando o botão é clicado, alterna is_open.
-    Quando um ícone é selecionado no RadioItems, fecha o popover e atualiza o botão.
+    Logica Hibrida:
+    - Clique no botao: Deixa o navegador (legacy) gerenciar abertura/fechamento.
+      Retorna no_update para is_open. Python gerencia apenas o filtro de opcoes.
+    - Selecao de icone: Força o fechamento (False) e atualiza o botao.
 
     Args:
-        n_clicks_btn: Cliques no botão seletor.
+        n_clicks_btn: Cliques no botao seletor.
         radio_value: Valor selecionado no RadioItems.
         is_open: Estado atual do popover.
+        btn_icon_current: Icone atual exibido no botao.
 
     Returns:
-        (is_open atualizado, texto do botão atualizado)
+        Tupla: (is_open, btn_children, radio_options)
     """
     if not ctx.triggered:
         raise PreventUpdate
 
     triggered_id = ctx.triggered_id
-    logger.debug(f"🎯 Emoji Picker Despesa acionado: {triggered_id}")
+    logger.debug(f"Emoji Picker Despesa acionado: {triggered_id}")
 
-    # Se foi clicado no botão, alterna is_open
+    # Cenario 1: Clique no botao
+    # Deixa o navegador (legacy) gerenciar abertura/fechamento
+    # Python apenas filtra as opcoes de icones
     if triggered_id == "btn-icon-despesa":
-        return (not is_open, ctx.states["btn-icon-despesa.children"])
+        # Recuperar icones ja usados e filtrar disponiveis
+        icones_usados = get_used_icons("despesa")
+        opcoes_disponiveis = [
+            {"label": e, "value": e} for e in EMOJI_OPTIONS if e not in icones_usados
+        ]
+        logger.info(
+            f"Popover Despesa alternado. "
+            f"Icones disponiveis: {len(opcoes_disponiveis)}/{len(EMOJI_OPTIONS)}"
+        )
+        # Retorna no_update para is_open: deixa o navegador controlar
+        return (no_update, no_update, opcoes_disponiveis)
 
-    # Se foi selecionado um ícone no RadioItems, fecha e atualiza botão
+    # Cenario 2: Selecao no RadioItems
+    # Força o fechamento e atualiza o botao com o novo icone
     elif triggered_id == "radio-icon-despesa" and radio_value:
-        logger.info(f"✅ Ícone selecionado (Despesa): {radio_value}")
-        return (False, radio_value)
+        logger.info(f"Icone selecionado (Despesa): {radio_value}")
+        # Fecha o popover (False), atualiza o botao, nao atualiza options
+        return (False, radio_value, no_update)
 
+    # Cenario 3: Sem trigger valido
     raise PreventUpdate
 
 

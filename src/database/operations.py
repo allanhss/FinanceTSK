@@ -145,6 +145,40 @@ def get_categories(tipo: Optional[str] = None) -> List[Dict[str, Any]]:
         return []
 
 
+def get_used_icons(tipo: str) -> List[str]:
+    """
+    Retrieves all icons already used for a given category type.
+
+    Args:
+        tipo: Category type ('receita' or 'despesa').
+
+    Returns:
+        List of icon strings (emojis) already in use for the type.
+
+    Example:
+        >>> get_used_icons(tipo='receita')
+        ['💰', '💸', '🏦']
+    """
+    try:
+        with get_db() as session:
+            icons = (
+                session.query(Categoria.icone)
+                .filter(
+                    Categoria.tipo == tipo,
+                    Categoria.icone.isnot(None),
+                )
+                .all()
+            )
+            # Extrair apenas os valores (tuples contém um elemento)
+            icons_list = [icon[0] for icon in icons]
+            logger.debug(f"Icones usados para '{tipo}': {len(icons_list)} encontrados")
+            return icons_list
+
+    except Exception as e:
+        logger.error(f"Erro ao recuperar icones usados: {e}")
+        return []
+
+
 def delete_category(category_id: int) -> Tuple[bool, str]:
     """
     Deletes a category by ID.

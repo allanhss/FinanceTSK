@@ -321,7 +321,7 @@ def render_icon_selector(id_suffix: str, placeholder_icon: str = "💰") -> html
                 [
                     dcc.RadioItems(
                         id=f"radio-icon-{id_suffix}",
-                        options=[{"label": e, "value": e} for e in EMOJI_OPTIONS],
+                        options=[],
                         value=placeholder_icon,
                         style={
                             "display": "grid",
