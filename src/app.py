@@ -625,16 +625,17 @@ def update_category_dropdowns(modal_is_open: bool, store_data: float):
         receitas = get_categories(tipo="receita")
         despesas = get_categories(tipo="despesa")
 
+        # Construir label com ícone + nome (sem espaços extras se não houver ícone)
         opcoes_receita = [
             {
-                "label": f"{cat.get('icone', '')} {cat.get('nome')}",
+                "label": f"{cat.get('icone', '')} {cat.get('nome')}".strip(),
                 "value": cat.get("id"),
             }
             for cat in receitas
         ]
         opcoes_despesa = [
             {
-                "label": f"{cat.get('icone', '')} {cat.get('nome')}",
+                "label": f"{cat.get('icone', '')} {cat.get('nome')}".strip(),
                 "value": cat.get("id"),
             }
             for cat in despesas
