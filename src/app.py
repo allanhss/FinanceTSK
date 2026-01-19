@@ -3,13 +3,17 @@ from datetime import date
 from typing import Dict, List
 
 import dash_bootstrap_components as dbc
-from dash import Dash, dcc, html, callback, Input, Output, State
-from dateutil.relativedelta import relativedelta
+from dash import Dash, dcc, html, Input, Output, State
 
 from src.components.dashboard import render_summary_cards
 from src.components.modals import render_transaction_modal
 from src.components.tables import render_transactions_table
-from src.database.operations import get_transactions, create_transaction
+from src.components.cash_flow import render_cash_flow_table
+from src.database.operations import (
+    get_transactions,
+    create_transaction,
+    get_cash_flow_data,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,24 +48,75 @@ app.layout = dbc.Container(
             className="mb-4",
         ),
         dcc.Location(id="url", refresh=False),
+        dbc.Row(
+            [
+                dbc.Col(
+                    [
+                        dbc.Label("Meses Passados:", html_for="select-past"),
+                        dcc.Dropdown(
+                            id="select-past",
+                            options=[
+                                {"label": "Nenhum", "value": 0},
+                                {"label": "1 mês", "value": 1},
+                                {"label": "3 meses", "value": 3},
+                                {"label": "6 meses", "value": 6},
+                                {"label": "12 meses", "value": 12},
+                            ],
+                            value=3,
+                        ),
+                    ],
+                    md=6,
+                    className="mb-3",
+                ),
+                dbc.Col(
+                    [
+                        dbc.Label("Meses Futuros:", html_for="select-future"),
+                        dcc.Dropdown(
+                            id="select-future",
+                            options=[
+                                {"label": "Nenhum", "value": 0},
+                                {"label": "1 mês", "value": 1},
+                                {"label": "3 meses", "value": 3},
+                                {"label": "6 meses", "value": 6},
+                                {"label": "12 meses", "value": 12},
+                            ],
+                            value=6,
+                        ),
+                    ],
+                    md=6,
+                    className="mb-3",
+                ),
+            ],
+            className="mb-4",
+        ),
         html.Div(
-            id="dashboard-container",
-            children=render_summary_cards(),
+            id="cash-flow-container",
+            children=render_cash_flow_table([]),
+            style={"overflowX": "auto"},
             className="mb-4",
         ),
         dbc.Row(
             [
                 dbc.Col(
                     dbc.Button(
-                        "+ Nova Transação",
-                        id="btn-nova-transacao",
-                        color="primary",
+                        "+ Receita",
+                        id="btn-nova-receita",
+                        color="success",
                         size="lg",
-                        className="mb-3",
-                        style={"width": "100%"},
+                        className="mb-3 w-100",
                     ),
-                    width=12,
-                )
+                    md=6,
+                ),
+                dbc.Col(
+                    dbc.Button(
+                        "+ Despesa",
+                        id="btn-nova-despesa",
+                        color="danger",
+                        size="lg",
+                        className="mb-3 w-100",
+                    ),
+                    md=6,
+                ),
             ]
         ),
         dcc.Tabs(
@@ -106,6 +161,63 @@ app.layout = dbc.Container(
     fluid=True,
     className="pt-4",
 )
+
+
+@app.callback(
+    Output("cash-flow-container", "children"),
+    Input("select-past", "value"),
+    Input("select-future", "value"),
+    Input("btn-salvar-despesa", "n_clicks"),
+    Input("btn-salvar-receita", "n_clicks"),
+    prevent_initial_call=False,
+    allow_duplicate=True,
+)
+def update_cash_flow(
+    months_past: int, months_future: int, n_clicks_despesa: int, n_clicks_receita: int
+) -> dbc.Card:
+    """
+    Atualiza a tabela de Fluxo de Caixa baseado nos controles de horizonte temporal.
+
+    Recarrega os dados sempre que o usuário muda os seletores de meses passados/futuros
+    ou quando salva uma nova transação.
+
+    Args:
+        months_past: Número de meses para trás (padrão 3).
+        months_future: Número de meses para frente (padrão 6).
+        n_clicks_despesa: Cliques no botão salvar despesa (sinal de atualização).
+        n_clicks_receita: Cliques no botão salvar receita (sinal de atualização).
+
+    Returns:
+        dbc.Card com a tabela de fluxo de caixa atualizada.
+    """
+    logger.info(
+        f"🔄 Atualizando Fluxo de Caixa: {months_past} meses passados, "
+        f"{months_future} meses futuros"
+    )
+
+    try:
+        fluxo_data = get_cash_flow_data(
+            months_past=months_past, months_future=months_future
+        )
+        tabela = render_cash_flow_table(fluxo_data)
+        logger.info("✓ Fluxo de caixa renderizado com sucesso")
+        return tabela
+
+    except Exception as e:
+        logger.error(f"✗ Erro ao atualizar fluxo de caixa: {e}", exc_info=True)
+        return dbc.Card(
+            [
+                dbc.CardHeader(html.H5("💰 Fluxo de Caixa")),
+                dbc.CardBody(
+                    dbc.Alert(
+                        f"Erro ao carregar fluxo de caixa: {str(e)}",
+                        color="danger",
+                        className="mb-0",
+                    )
+                ),
+            ],
+            className="shadow-sm",
+        )
 
 
 @app.callback(
@@ -421,23 +533,43 @@ def update_dashboard_cards(store_data: float):
 
 @app.callback(
     Output("modal-transacao", "is_open"),
-    Input("btn-nova-transacao", "n_clicks"),
+    Output("tabs-modal-transacao", "value"),
+    Input("btn-nova-receita", "n_clicks"),
+    Input("btn-nova-despesa", "n_clicks"),
     State("modal-transacao", "is_open"),
     prevent_initial_call=True,
 )
-def toggle_modal_open(n_clicks_nova: int, is_open: bool) -> bool:
+def toggle_modal_open(
+    n_clicks_receita: int, n_clicks_despesa: int, is_open: bool
+) -> tuple:
     """
-    Abre o modal ao clicar em "+ Nova Transação".
+    Abre o modal ao clicar em "+ Receita" ou "+ Despesa".
+
+    Identifica qual botão disparou o callback usando dash.ctx
+    e abre o modal na aba correta.
 
     Args:
-        n_clicks_nova: Cliques no botão "+ Nova Transação".
+        n_clicks_receita: Cliques no botão "+ Receita".
+        n_clicks_despesa: Cliques no botão "+ Despesa".
         is_open: Estado atual do modal.
 
     Returns:
-        Novo estado booleano do modal.
+        Tuple (novo_estado_modal, aba_ativa).
     """
-    logger.info(f"🔘 Abrindo modal...")
-    return not is_open
+    from dash import ctx
+
+    if not ctx.triggered:
+        return False, "tab-despesa"
+
+    botao_disparado = ctx.triggered[0]["prop_id"].split(".")[0]
+    logger.info(f"🔘 Abrindo modal via botão: {botao_disparado}")
+
+    if botao_disparado == "btn-nova-receita":
+        return True, "tab-receita"
+    elif botao_disparado == "btn-nova-despesa":
+        return True, "tab-despesa"
+    else:
+        return not is_open, "tab-despesa"
 
 
 @app.callback(

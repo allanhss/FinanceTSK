@@ -341,3 +341,121 @@ def get_dashboard_summary(month: int, year: int) -> Dict[str, float]:
             "total_despesas": 0.0,
             "saldo": 0.0,
         }
+
+
+def get_cash_flow_data(
+    months_past: int = 6, months_future: int = 6
+) -> List[Dict[str, Any]]:
+    """
+    Calcula fluxo de caixa mensal para análise de padrões financeiros.
+
+    Gera dados de receitas, despesas e saldo para cada mês dentro do intervalo
+    especificado (N meses passados até M meses futuros). Meses sem transações
+    aparecem com valores zerados.
+
+    Args:
+        months_past: Número de meses para trás a partir de hoje (default 6).
+        months_future: Número de meses para frente a partir de hoje (default 6).
+
+    Returns:
+        Lista de dicts ordenada cronologicamente:
+            [
+                {
+                    "mes": "2026-01",
+                    "receitas": 1000.0,
+                    "despesas": 500.0,
+                    "saldo": 500.0
+                },
+                ...
+            ]
+
+    Example:
+        >>> fluxo = get_cash_flow_data(months_past=3, months_future=3)
+        >>> print(fluxo[0])
+        {'mes': '2025-10', 'receitas': 0.0, 'despesas': 0.0, 'saldo': 0.0}
+    """
+    try:
+        hoje = date.today()
+        data_inicio = hoje - relativedelta(months=months_past)
+        data_fim = hoje + relativedelta(months=months_future)
+
+        # Gerar lista de todos os meses no intervalo
+        meses_intervalo = []
+        data_atual = data_inicio.replace(day=1)
+
+        while data_atual <= data_fim:
+            mes_str = data_atual.strftime("%Y-%m")
+            meses_intervalo.append(mes_str)
+            data_atual = data_atual + relativedelta(months=1)
+
+        # Inicializar dicionário com todos os meses zerados
+        fluxo_dict = {
+            mes: {"receitas": 0.0, "despesas": 0.0, "saldo": 0.0}
+            for mes in meses_intervalo
+        }
+
+        with get_db() as session:
+            # Query de receitas agrupadas por mês
+            receitas_query = (
+                session.query(
+                    func.strftime("%Y-%m", Transacao.data).label("mes"),
+                    func.sum(Transacao.valor).label("total"),
+                )
+                .filter(
+                    Transacao.tipo == "receita",
+                    Transacao.data >= data_inicio,
+                    Transacao.data <= data_fim,
+                )
+                .group_by("mes")
+                .all()
+            )
+
+            # Query de despesas agrupadas por mês
+            despesas_query = (
+                session.query(
+                    func.strftime("%Y-%m", Transacao.data).label("mes"),
+                    func.sum(Transacao.valor).label("total"),
+                )
+                .filter(
+                    Transacao.tipo == "despesa",
+                    Transacao.data >= data_inicio,
+                    Transacao.data <= data_fim,
+                )
+                .group_by("mes")
+                .all()
+            )
+
+            # Preencher dicionário com dados reais
+            for mes, total in receitas_query:
+                if mes in fluxo_dict:
+                    fluxo_dict[mes]["receitas"] = float(total) if total else 0.0
+
+            for mes, total in despesas_query:
+                if mes in fluxo_dict:
+                    fluxo_dict[mes]["despesas"] = float(total) if total else 0.0
+
+        # Calcular saldo para cada mês e construir resultado final
+        resultado = []
+        for mes in meses_intervalo:
+            receitas = fluxo_dict[mes]["receitas"]
+            despesas = fluxo_dict[mes]["despesas"]
+            saldo = receitas - despesas
+
+            resultado.append(
+                {
+                    "mes": mes,
+                    "receitas": receitas,
+                    "despesas": despesas,
+                    "saldo": saldo,
+                }
+            )
+
+        logger.info(
+            f"Fluxo de caixa calculado: {len(resultado)} meses "
+            f"({meses_intervalo[0]} até {meses_intervalo[-1]})"
+        )
+        return resultado
+
+    except Exception as e:
+        logger.error(f"Erro ao calcular fluxo de caixa: {e}")
+        return []
