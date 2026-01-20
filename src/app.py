@@ -1,6 +1,8 @@
 import logging
+import re
 import time
 import traceback
+from collections import defaultdict
 from datetime import date, datetime
 from dateutil.relativedelta import relativedelta
 from typing import Any, Dict, List, Optional
@@ -167,8 +169,9 @@ app.layout = dbc.Container(
                 dbc.ModalBody(html.Div(id="conteudo-modal-detalhes")),
             ],
             id="modal-detalhes-categoria",
-            size="lg",
+            size="xl",
             centered=True,
+            style={"maxWidth": "95vw"},
         ),
         dcc.Store(
             id="store-data-atual",
@@ -531,67 +534,113 @@ def open_category_detail_modal(
                 color="info",
             )
         else:
-            # Construir cabeçalho
-            header_cells = [
-                html.Th("Data", className="text-nowrap fw-bold"),
-                html.Th("Descrição", className="fw-bold"),
-                html.Th("Valor", className="text-end fw-bold"),
-            ]
-            cabecalho = html.Thead(html.Tr(header_cells, className="table-light"))
+            # ===== GERAR LISTA DE MESES PARA PIVOT TABLE =====
+            meses_headers: List[str] = []
+            data_atual = start_date.replace(day=1)
+            while data_atual <= end_date:
+                mes_str = data_atual.strftime("%Y-%m")
+                meses_headers.append(mes_str)
+                data_atual = data_atual + relativedelta(months=1)
 
-            # Construir corpo com linhas das transações (ordenadas por data DESC)
-            linhas = []
-            for transacao in sorted(
-                transacoes_encontradas,
-                key=lambda x: x.get("data") or date.today(),
-                reverse=True,
-            ):
+            # ===== CONSTRUIR PIVOT TABLE (Descrição x Mês) =====
+            # dados_matrix[descrição][mês] = valor
+            dados_matrix: Dict[str, Dict[str, float]] = defaultdict(
+                lambda: defaultdict(float)
+            )
+            tipo_transacao: Dict[str, str] = {}  # Rastrear tipo para colorir
+
+            for transacao in transacoes_encontradas:
+                # Extrair data em formato YYYY-MM
                 raw_date = transacao.get("data")
-                if raw_date is None:
-                    continue
-
-                # Converter data para formato DD/MM/YYYY (suporta string ou datetime)
-                data_formatada = raw_date
+                mes_key = None
 
                 if isinstance(raw_date, str):
                     try:
-                        # Converte de YYYY-MM-DD (string ISO) para objeto datetime
-                        dt_obj = datetime.strptime(raw_date, "%Y-%m-%d")
-                        data_formatada = dt_obj.strftime("%d/%m/%Y")
-                    except ValueError:
-                        # Mantém a string original se falhar a conversão
-                        data_formatada = raw_date
+                        # String ISO: YYYY-MM-DD
+                        mes_key = raw_date[:7]  # Pega YYYY-MM
+                    except Exception:
+                        pass
                 elif hasattr(raw_date, "strftime"):
-                    # Se for um objeto datetime.date ou datetime.datetime
-                    data_formatada = raw_date.strftime("%d/%m/%Y")
+                    # Objeto datetime.date ou datetime.datetime
+                    mes_key = raw_date.strftime("%Y-%m")
 
+                if mes_key is None:
+                    continue  # Pula se não conseguir extrair mês
+
+                # Limpar descrição removendo sufixos de recorrência
                 descricao = transacao.get("descricao", "")
+                desc_limpa = re.sub(r"\s*\(Recorrência #\d+\)", "", descricao)
+
+                # Agregar valor
                 valor = transacao.get("valor", 0.0)
                 tipo = transacao.get("tipo", "")
 
-                # Formatar valor com cor baseada no tipo
-                if tipo == "receita":
-                    valor_cell = html.Td(
-                        f"R$ {valor:,.2f}".replace(",", "X")
-                        .replace(".", ",")
-                        .replace("X", "."),
-                        className="text-end text-success fw-bold",
+                dados_matrix[desc_limpa][mes_key] += valor
+                tipo_transacao[desc_limpa] = tipo  # Rastreia tipo da descrição
+
+            # ===== CONSTRUIR CABEÇALHO DA TABELA =====
+            header_cells = [html.Th("Descrição", className="text-nowrap fw-bold")]
+            for mes in meses_headers:
+                mes_formatado = f"{mes[5:7]}/{mes[-2:]}"  # MM/YY
+                header_cells.append(
+                    html.Th(
+                        mes_formatado,
+                        className="text-center text-nowrap fw-bold",
+                        style={"minWidth": "70px"},
                     )
-                else:
-                    valor_cell = html.Td(
-                        f"R$ {valor:,.2f}".replace(",", "X")
-                        .replace(".", ",")
-                        .replace("X", "."),
-                        className="text-end text-danger fw-bold",
-                    )
+                )
+
+            cabecalho = html.Thead(html.Tr(header_cells, className="table-light"))
+
+            # ===== CONSTRUIR CORPO DA TABELA =====
+            linhas = []
+            for desc_limpa in sorted(dados_matrix.keys()):
+                valores_por_mes = dados_matrix[desc_limpa]
+                tipo = tipo_transacao.get(desc_limpa, "")
+
+                # Determinar cor baseada no tipo
+                cor_texto = "text-success" if tipo == "receita" else "text-danger"
+
+                # Célula de descrição
+                desc_cell = html.Td(
+                    desc_limpa,
+                    className="fw-bold",
+                    style={"minWidth": "150px"},
+                )
+
+                # Células de valores por mês
+                valor_cells = []
+                for mes in meses_headers:
+                    valor = valores_por_mes.get(mes, 0.0)
+
+                    if valor == 0.0:
+                        # Sem valor neste mês
+                        valor_cells.append(
+                            html.Td(
+                                "-",
+                                className="text-center text-muted",
+                                style={"minWidth": "70px"},
+                            )
+                        )
+                    else:
+                        # Com valor: formatar em R$
+                        valor_fmt = (
+                            f"R$ {valor:,.2f}".replace(",", "X")
+                            .replace(".", ",")
+                            .replace("X", ".")
+                        )
+                        valor_cells.append(
+                            html.Td(
+                                valor_fmt,
+                                className=f"text-end text-nowrap fw-bold {cor_texto}",
+                                style={"minWidth": "70px"},
+                            )
+                        )
 
                 linhas.append(
                     html.Tr(
-                        [
-                            html.Td(data_formatada, className="text-nowrap"),
-                            html.Td(descricao),
-                            valor_cell,
-                        ]
+                        [desc_cell] + valor_cells,
+                        className="table-light",
                     )
                 )
 
@@ -603,6 +652,7 @@ def open_category_detail_modal(
                 responsive=True,
                 size="sm",
                 className="mb-0 table-striped",
+                style={"overflowX": "auto", "minWidth": "1000px"},
             )
 
         # Título do modal
