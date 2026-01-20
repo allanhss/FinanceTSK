@@ -779,3 +779,149 @@ def get_cash_flow_data(
     except Exception as e:
         logger.error(f"Erro ao calcular fluxo de caixa: {e}")
         return []
+
+
+def get_category_matrix_data(
+    months_past: int = 6, months_future: int = 6
+) -> Dict[str, Any]:
+    """
+    Gera matriz analítica de transações agrupadas por categoria e mês.
+
+    Prepara dados para visualização de tabela cruzada onde linhas são
+    categorias (com ícones) e colunas são meses. Cada célula contém
+    a soma das transações daquela categoria naquele mês.
+
+    Args:
+        months_past: Número de meses para trás a partir de hoje (default 6).
+        months_future: Número de meses para frente a partir de hoje (default 6).
+
+    Returns:
+        Dict com estrutura:
+            {
+                "meses": ["2026-01", "2026-02", ...],
+                "receitas": [
+                    {
+                        "id": 1,
+                        "nome": "Salário",
+                        "icon": "💰",
+                        "valores": {"2026-01": 5000.0, "2026-02": 5000.0, ...}
+                    },
+                    ...
+                ],
+                "despesas": [
+                    {
+                        "id": 5,
+                        "nome": "Alimentação",
+                        "icon": "🍔",
+                        "valores": {"2026-01": 800.0, ...}
+                    },
+                    ...
+                ]
+            }
+
+    Example:
+        >>> matriz = get_category_matrix_data(months_past=3, months_future=3)
+        >>> print(matriz["meses"])
+        ['2025-10', '2025-11', '2025-12', '2026-01', '2026-02', '2026-03']
+        >>> print(len(matriz["receitas"]))
+        3
+    """
+    try:
+        hoje = date.today()
+        data_inicio = hoje - relativedelta(months=months_past)
+        data_fim = hoje + relativedelta(months=months_future)
+
+        # Gerar lista de todos os meses no intervalo (reutiliza lógica get_cash_flow_data)
+        meses_intervalo = []
+        data_atual = data_inicio.replace(day=1)
+
+        while data_atual <= data_fim:
+            mes_str = data_atual.strftime("%Y-%m")
+            meses_intervalo.append(mes_str)
+            data_atual = data_atual + relativedelta(months=1)
+
+        with get_db() as session:
+            # Query: Agrupar transações por categoria e mês
+            query = (
+                session.query(
+                    Categoria.id,
+                    Categoria.nome,
+                    Categoria.icone,
+                    Categoria.tipo,
+                    func.strftime("%Y-%m", Transacao.data).label("mes"),
+                    func.sum(Transacao.valor).label("total"),
+                )
+                .join(Transacao, Categoria.id == Transacao.categoria_id)
+                .filter(
+                    Transacao.data >= data_inicio,
+                    Transacao.data <= data_fim,
+                )
+                .group_by(
+                    Categoria.id,
+                    Categoria.nome,
+                    Categoria.icone,
+                    Categoria.tipo,
+                    "mes",
+                )
+                .all()
+            )
+
+            # Estruturar dados: {categoria_id: {tipo, nome, icone, valores: {mes: total}}}
+            categorias_dict = {}
+
+            for categoria_id, nome, icone, tipo, mes, total in query:
+                if categoria_id not in categorias_dict:
+                    categorias_dict[categoria_id] = {
+                        "id": categoria_id,
+                        "nome": nome,
+                        "icon": icone or "📊",  # Ícone padrão se não houver
+                        "tipo": tipo,
+                        "valores": {mes_col: 0.0 for mes_col in meses_intervalo},
+                    }
+
+                # Preencher valor do mês específico
+                if mes in categorias_dict[categoria_id]["valores"]:
+                    categorias_dict[categoria_id]["valores"][mes] = (
+                        float(total) if total else 0.0
+                    )
+
+            # Separar por tipo e remover chave 'tipo'
+            receitas_list = []
+            despesas_list = []
+
+            for categoria_id, cat_data in categorias_dict.items():
+                categoria_info = {
+                    "id": cat_data["id"],
+                    "nome": cat_data["nome"],
+                    "icon": cat_data["icon"],
+                    "valores": cat_data["valores"],
+                }
+
+                if cat_data["tipo"] == "receita":
+                    receitas_list.append(categoria_info)
+                elif cat_data["tipo"] == "despesa":
+                    despesas_list.append(categoria_info)
+
+            # Ordenar por nome para consistência
+            receitas_list.sort(key=lambda x: x["nome"])
+            despesas_list.sort(key=lambda x: x["nome"])
+
+            resultado = {
+                "meses": meses_intervalo,
+                "receitas": receitas_list,
+                "despesas": despesas_list,
+            }
+
+            logger.info(
+                f"Matriz de categorias calculada: {len(receitas_list)} receitas, "
+                f"{len(despesas_list)} despesas, {len(meses_intervalo)} meses"
+            )
+            return resultado
+
+    except Exception as e:
+        logger.error(f"Erro ao calcular matriz de categorias: {e}")
+        return {
+            "meses": [],
+            "receitas": [],
+            "despesas": [],
+        }

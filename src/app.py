@@ -1,7 +1,9 @@
 import logging
 import time
-from datetime import date
-from typing import Dict, List, Optional
+import traceback
+from datetime import date, datetime
+from dateutil.relativedelta import relativedelta
+from typing import Any, Dict, List, Optional
 
 import dash_bootstrap_components as dbc
 from dash import Dash, dcc, html, Input, Output, State, MATCH, ALL, ctx, no_update
@@ -12,6 +14,7 @@ from src.database.operations import (
     get_transactions,
     create_transaction,
     get_cash_flow_data,
+    get_category_matrix_data,
     get_categories,
     create_category,
     delete_category,
@@ -22,6 +25,7 @@ from src.components.modals import render_transaction_modal
 from src.components.tables import render_transactions_table
 from src.components.cash_flow import render_cash_flow_table
 from src.components.category_manager import render_category_manager, EMOJI_OPTIONS
+from src.components.category_matrix import render_category_matrix
 
 logger = logging.getLogger(__name__)
 
@@ -144,13 +148,28 @@ app.layout = dbc.Container(
                     value="tab-despesas",
                 ),
                 dcc.Tab(
-                    label="📁 Categorias",
+                    label="� Análise",
+                    value="tab-analise",
+                ),
+                dcc.Tab(
+                    label="�📁 Categorias",
                     value="tab-categorias",
                 ),
             ],
         ),
         html.Div(id="conteudo-abas", className="mt-4"),
         render_transaction_modal(is_open=False),
+        dbc.Modal(
+            [
+                dbc.ModalHeader(
+                    html.H5(id="modal-categoria-titulo", className="fw-bold")
+                ),
+                dbc.ModalBody(html.Div(id="conteudo-modal-detalhes")),
+            ],
+            id="modal-detalhes-categoria",
+            size="lg",
+            centered=True,
+        ),
         dcc.Store(
             id="store-data-atual",
             data={"ano": date.today().year, "mes": date.today().month},
@@ -238,6 +257,8 @@ def update_cash_flow(
     Input("tabs-principal", "value"),
     Input("store-transacao-salva", "data"),
     Input("store-categorias-atualizadas", "data"),
+    State("select-past", "value"),
+    State("select-future", "value"),
     prevent_initial_call=False,
     allow_duplicate=True,
 )
@@ -245,6 +266,8 @@ def render_tab_content(
     tab_value: str,
     store_transacao: float,
     store_categorias: float,
+    months_past: int,
+    months_future: int,
 ):
     """
     Renderiza o conteúdo dinâmico das abas.
@@ -258,6 +281,8 @@ def render_tab_content(
         tab_value: Valor da aba selecionada.
         store_transacao: Timestamp da última transação salva (sinal).
         store_categorias: Timestamp da última atualização de categorias (sinal).
+        months_past: Número de meses passados para análise.
+        months_future: Número de meses futuros para análise.
 
     Returns:
         Componente do Dash com o conteúdo da aba selecionada.
@@ -311,6 +336,29 @@ def render_tab_content(
                     color="danger",
                 )
 
+        elif tab_value == "tab-analise":
+            logger.info("📈 Carregando matriz analítica...")
+            try:
+                matriz_data = get_category_matrix_data(
+                    months_past=months_past, months_future=months_future
+                )
+                logger.info("✓ Matriz analítica carregada com sucesso")
+                return dbc.Card(
+                    [
+                        dbc.CardHeader(
+                            html.H3("📈 Matriz Analítica - Categorias vs Meses")
+                        ),
+                        dbc.CardBody(render_category_matrix(matriz_data)),
+                    ],
+                    className="shadow-sm",
+                )
+            except Exception as e:
+                logger.error(f"✗ Erro ao carregar matriz analítica: {e}", exc_info=True)
+                return dbc.Alert(
+                    f"Erro ao carregar matriz analítica: {str(e)}",
+                    color="danger",
+                )
+
         elif tab_value == "tab-categorias":
             logger.info("📁 Carregando categorias...")
             try:
@@ -341,6 +389,245 @@ def render_tab_content(
         return dbc.Alert(
             f"Erro ao carregar conteúdo: {str(e)}",
             color="danger",
+        )
+
+
+# ===== CALLBACKS PARA DRILL-DOWN DE CATEGORIAS =====
+@app.callback(
+    Output("modal-detalhes-categoria", "is_open"),
+    Output("modal-categoria-titulo", "children"),
+    Output("conteudo-modal-detalhes", "children"),
+    Input({"type": "btn-cat-detail", "index": ALL}, "n_clicks"),
+    State("select-past", "value"),
+    State("select-future", "value"),
+    prevent_initial_call=True,
+    allow_duplicate=True,
+)
+def open_category_detail_modal(
+    n_clicks_list: List[int],
+    months_past: int,
+    months_future: int,
+) -> tuple:
+    """
+    Abre modal com detalhes e transações de uma categoria específica.
+
+    Quando o usuário clica em uma categoria na Matriz Analítica,
+    este callback:
+    1. Identifica qual categoria foi clicada
+    2. Busca as transações dessa categoria no período (sincronizado com matriz)
+    3. Renderiza uma tabela com as transações
+    4. Abre o modal
+
+    O cálculo de datas é idêntico ao de `get_cash_flow_data` para garantir
+    consistência entre matriz e modal.
+
+    Args:
+        n_clicks_list: Lista de contagens de cliques dos botões.
+        months_past: Número de meses passados para filtro.
+        months_future: Número de meses futuros para filtro.
+
+    Returns:
+        Tuple (is_open, titulo, conteudo) para o modal.
+    """
+    try:
+        # ===== PROTEÇÃO CONTRA DISPAROS FALSOS =====
+        if not ctx.triggered:
+            print("⚠️ Nenhum trigger detectado (ctx.triggered vazio)")
+            raise PreventUpdate
+
+        if not any(n_clicks_list):
+            print("⚠️ Nenhum clique detectado (todos os n_clicks são None/0)")
+            raise PreventUpdate
+
+        # ===== IDENTIFICAR CATEGORIA CLICADA =====
+        trigger_id = ctx.triggered[0]["prop_id"]
+        categoria_id = eval(trigger_id.split(".")[0])["index"]
+
+        print(f"🕵️‍♂️ Drill-down acionado para Categoria ID: {categoria_id}")
+        print(
+            f"   Período solicitado: {months_past} meses passados, {months_future} meses futuros"
+        )
+
+        # ===== CALCULAR DATAS (SINCRONIZADO COM get_cash_flow_data) =====
+        hoje = date.today()
+        # Primeiro dia do mês X meses atrás
+        start_date = (hoje - relativedelta(months=months_past)).replace(day=1)
+        # Último dia do mês X meses adiante
+        end_date = (
+            (hoje + relativedelta(months=months_future)).replace(day=1)
+            + relativedelta(months=1)
+            - relativedelta(days=1)
+        )
+
+        print(f"📅 Período Modal: {start_date} até {end_date}")
+
+        # ===== BUSCAR TODAS AS TRANSAÇÕES DO PERÍODO =====
+        print(f"📊 Buscando no DB de {start_date} até {end_date}")
+        todas_transacoes = get_transactions(
+            start_date=start_date,
+            end_date=end_date,
+        )
+        print(f"📦 Total bruto encontrado no período: {len(todas_transacoes)}")
+
+        # Mostrar exemplo da primeira transação se houver
+        if todas_transacoes:
+            print(f"🔍 Exemplo de transação: {todas_transacoes[0]}")
+
+        # ===== FILTRAR POR CATEGORIA EM PYTHON =====
+        # Converter categoria_id para int e filtrar com flexibilidade de tipo
+        cat_id_int: int
+        try:
+            cat_id_int = int(categoria_id)
+        except (ValueError, TypeError):
+            print(f"❌ Erro ao converter categoria_id para int: {categoria_id}")
+            raise PreventUpdate
+
+        # Construir lista filtrada acessando a estrutura aninhada de categoria
+        transacoes_encontradas: List[Dict[str, Any]] = []
+
+        for t in todas_transacoes:
+            # Extrair ID da categoria da estrutura aninhada
+            cat_data = t.get("categoria") or {}  # Garante que é dict
+            t_cat_id = cat_data.get("id")
+
+            # Fallback: Se não achar no aninhado, tenta na raiz (compatibilidade)
+            if t_cat_id is None:
+                t_cat_id = t.get("categoria_id")
+
+            # Comparar IDs com segurança de tipo
+            try:
+                if t_cat_id is not None and int(t_cat_id) == cat_id_int:
+                    transacoes_encontradas.append(t)
+                    # Log opcional (comentado para não poluir console)
+                    # print(f"🧐 Transação {t.get('id')}: Cat ID = {t_cat_id} ✓")
+            except (ValueError, TypeError):
+                # Se não conseguir converter t_cat_id para int, pula
+                pass
+
+        print(
+            f"🎯 Filtrado para Categoria {cat_id_int}: {len(transacoes_encontradas)} encontrados."
+        )
+
+        # ===== BUSCAR CATEGORIA =====
+        categorias = get_categories()
+        categoria = next((c for c in categorias if c.get("id") == categoria_id), None)
+
+        if not categoria:
+            print(f"❌ Categoria ID {categoria_id} não encontrada no banco")
+            raise PreventUpdate
+
+        categoria_nome = categoria.get("nome", "Desconhecida")
+        categoria_icon = categoria.get("icone", "📊")
+
+        print(f"✅ Categoria encontrada: {categoria_icon} {categoria_nome}")
+
+        # ===== RENDERIZAR CONTEÚDO DO MODAL =====
+        if not transacoes_encontradas:
+            print(f"ℹ️  Nenhuma transação para {categoria_nome} no período")
+            tabela_conteudo = dbc.Alert(
+                f"Nenhuma transação encontrada para {categoria_nome} "
+                f"no período de {start_date.strftime('%d/%m/%Y')} "
+                f"até {end_date.strftime('%d/%m/%Y')}.",
+                color="info",
+            )
+        else:
+            # Construir cabeçalho
+            header_cells = [
+                html.Th("Data", className="text-nowrap fw-bold"),
+                html.Th("Descrição", className="fw-bold"),
+                html.Th("Valor", className="text-end fw-bold"),
+            ]
+            cabecalho = html.Thead(html.Tr(header_cells, className="table-light"))
+
+            # Construir corpo com linhas das transações (ordenadas por data DESC)
+            linhas = []
+            for transacao in sorted(
+                transacoes_encontradas,
+                key=lambda x: x.get("data") or date.today(),
+                reverse=True,
+            ):
+                raw_date = transacao.get("data")
+                if raw_date is None:
+                    continue
+
+                # Converter data para formato DD/MM/YYYY (suporta string ou datetime)
+                data_formatada = raw_date
+
+                if isinstance(raw_date, str):
+                    try:
+                        # Converte de YYYY-MM-DD (string ISO) para objeto datetime
+                        dt_obj = datetime.strptime(raw_date, "%Y-%m-%d")
+                        data_formatada = dt_obj.strftime("%d/%m/%Y")
+                    except ValueError:
+                        # Mantém a string original se falhar a conversão
+                        data_formatada = raw_date
+                elif hasattr(raw_date, "strftime"):
+                    # Se for um objeto datetime.date ou datetime.datetime
+                    data_formatada = raw_date.strftime("%d/%m/%Y")
+
+                descricao = transacao.get("descricao", "")
+                valor = transacao.get("valor", 0.0)
+                tipo = transacao.get("tipo", "")
+
+                # Formatar valor com cor baseada no tipo
+                if tipo == "receita":
+                    valor_cell = html.Td(
+                        f"R$ {valor:,.2f}".replace(",", "X")
+                        .replace(".", ",")
+                        .replace("X", "."),
+                        className="text-end text-success fw-bold",
+                    )
+                else:
+                    valor_cell = html.Td(
+                        f"R$ {valor:,.2f}".replace(",", "X")
+                        .replace(".", ",")
+                        .replace("X", "."),
+                        className="text-end text-danger fw-bold",
+                    )
+
+                linhas.append(
+                    html.Tr(
+                        [
+                            html.Td(data_formatada, className="text-nowrap"),
+                            html.Td(descricao),
+                            valor_cell,
+                        ]
+                    )
+                )
+
+            corpo = html.Tbody(linhas)
+            tabela_conteudo = dbc.Table(
+                [cabecalho, corpo],
+                bordered=True,
+                hover=True,
+                responsive=True,
+                size="sm",
+                className="mb-0 table-striped",
+            )
+
+        # Título do modal
+        titulo = html.Span(f"{categoria_icon} {categoria_nome}")
+
+        print(
+            f"✅ Modal renderizado com sucesso ({len(transacoes_encontradas)} transações)"
+        )
+
+        return True, titulo, tabela_conteudo
+
+    except PreventUpdate:
+        raise
+    except Exception as e:
+        erro_traceback = traceback.format_exc()
+        print(f"❌ ERRO ao abrir detalhes da categoria:")
+        print(erro_traceback)
+        logger.error(f"Erro ao abrir detalhes da categoria: {e}", exc_info=True)
+        return (
+            True,
+            "❌ Erro",
+            dbc.Alert(
+                f"Erro ao carregar detalhes: {str(e)}\n\nVerifique o console para mais informações.",
+                color="danger",
+            ),
         )
 
 
