@@ -240,6 +240,7 @@ class Transacao(Base):
     )
     pessoa_origem: Optional[str] = Column(String(100), nullable=True)
     observacoes: Optional[str] = Column(Text, nullable=True)
+    tag: Optional[str] = Column(String(50), nullable=True, index=True)
     tags: Optional[str] = Column(String(500), nullable=True)
     forma_pagamento: Optional[str] = Column(String(50), nullable=True)
     numero_parcelas: int = Column(Integer, nullable=True, default=1)
@@ -274,6 +275,7 @@ class Transacao(Base):
         categoria_id: int,
         pessoa_origem: Optional[str] = None,
         observacoes: Optional[str] = None,
+        tag: Optional[str] = None,
         tags: Optional[str] = None,
         forma_pagamento: Optional[str] = None,
         numero_parcelas: int = 1,
@@ -294,6 +296,7 @@ class Transacao(Base):
             categoria_id: ID da categoria
             pessoa_origem: Pessoa que originou (opcional)
             observacoes: Observações adicionais (opcional)
+            tag: Tag/Entidade transversal para agrupamento (opcional, ex: 'Mãe', 'Trabalho')
             tags: Tags separadas por vírgula (opcional)
             forma_pagamento: Forma de pagamento (opcional)
             numero_parcelas: Total de parcelas (default 1)
@@ -338,6 +341,7 @@ class Transacao(Base):
         self.categoria_id = categoria_id
         self.pessoa_origem = pessoa_origem
         self.observacoes = observacoes
+        self.tag = tag
         self.tags = tags
         self.forma_pagamento = forma_pagamento
         self.numero_parcelas = numero_parcelas if numero_parcelas else 1
@@ -398,6 +402,7 @@ class Transacao(Base):
             "categoria": (self.categoria.to_dict() if self.categoria else None),
             "pessoa_origem": self.pessoa_origem,
             "observacoes": self.observacoes,
+            "tag": self.tag,
             "tags": self.tags,
             "forma_pagamento": self.forma_pagamento,
             "numero_parcelas": self.numero_parcelas,

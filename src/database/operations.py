@@ -312,6 +312,7 @@ def create_transaction(
     categoria_id: int,
     observacoes: Optional[str] = None,
     pessoa_origem: Optional[str] = None,
+    tag: Optional[str | List[str]] = None,
     tags: Optional[str] = None,
     forma_pagamento: Optional[str] = None,
     numero_parcelas: int = 1,
@@ -337,7 +338,10 @@ def create_transaction(
         categoria_id: ID of the associated category.
         observacoes: Optional additional notes.
         pessoa_origem: Optional name of origin person/entity.
-        tags: Optional comma-separated tags for organization.
+        tag: Optional tag(s) for cross-cutting grouping. Can be:
+            - Single string: 'Mãe' → stored as 'Mãe'
+            - List of strings: ['Mãe', 'Saúde'] → stored as 'Mãe,Saúde'
+        tags: Optional comma-separated tags for organization (legacy).
         forma_pagamento: Optional payment method (dinheiro, pix, credito, etc).
         numero_parcelas: Number of installments (default 1).
         is_recorrente: Whether transaction is recurring (default False).
@@ -349,7 +353,7 @@ def create_transaction(
         Tuple with (success: bool, message: str).
 
     Example:
-        >>> # Create a purchase in 3 installments
+        >>> # Create a purchase in 3 installments with multiple tags
         >>> create_transaction(
         ...     tipo='despesa',
         ...     descricao='Compra',
@@ -357,9 +361,10 @@ def create_transaction(
         ...     data=date(2026, 1, 18),
         ...     categoria_id=1,
         ...     numero_parcelas=3,
-        ...     forma_pagamento='credito'
+        ...     forma_pagamento='credito',
+        ...     tag=['Mãe', 'Saúde']
         ... )
-        # Creates 3 transactions: 100 each, on 18/01, 18/02, 18/03
+        # Creates 3 transactions: 100 each, on 18/01, 18/02, 18/03, each with tags 'Mãe,Saúde'
     """
     try:
         logger.debug(f"🔄 Tentando criar transação: {tipo} - R$ {valor} - {descricao}")
@@ -379,7 +384,18 @@ def create_transaction(
             logger.error("❌ Descrição vazia")
             return False, "Descrição não pode estar vazia."
 
-        logger.debug(f"📝 Validações OK. Abrindo sessão do banco...")
+        # Normalizar tag: converter lista para string CSV, ou deixar None
+        tag_normalizada: Optional[str] = None
+        if tag:
+            if isinstance(tag, list):
+                # Lista de tags: juntar com vírgula
+                tag_normalizada = ",".join(str(t).strip() for t in tag if t)
+            else:
+                # String única: usar diretamente
+                tag_normalizada = str(tag).strip() if tag else None
+
+        logger.debug(f"📝 Validações OK. Tag normalizada: {tag_normalizada}")
+        logger.debug(f"🔓 Abrindo sessão do banco...")
         with get_db() as session:
             try:
                 logger.debug(f"🔍 Verificando categoria ID: {categoria_id}")
@@ -414,6 +430,7 @@ def create_transaction(
                             categoria_id=categoria_id,
                             observacoes=observacoes,
                             pessoa_origem=pessoa_origem,
+                            tag=tag_normalizada,
                             tags=tags,
                             forma_pagamento=forma_pagamento,
                             numero_parcelas=numero_parcelas,
@@ -459,6 +476,7 @@ def create_transaction(
                                 categoria_id=categoria_id,
                                 observacoes=observacoes,
                                 pessoa_origem=pessoa_origem,
+                                tag=tag_normalizada,
                                 tags=tags,
                                 forma_pagamento=forma_pagamento,
                                 numero_parcelas=1,
@@ -494,6 +512,7 @@ def create_transaction(
                     categoria_id=categoria_id,
                     observacoes=observacoes,
                     pessoa_origem=pessoa_origem,
+                    tag=tag_normalizada,
                     tags=tags,
                     forma_pagamento=forma_pagamento,
                     numero_parcelas=1,
@@ -526,13 +545,15 @@ def create_transaction(
 def get_transactions(
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
+    tag: Optional[str] = None,
 ) -> List[Dict]:
     """
-    Retrieves transactions filtered by date range.
+    Retrieves transactions filtered by date range and optional tag.
 
     Args:
         start_date: Start of date range (inclusive).
         end_date: End of date range (inclusive).
+        tag: Optional tag filter for cross-cutting grouping (ex: 'Mãe', 'Trabalho').
 
     Returns:
         List of transaction dictionaries, ordered by date (newest first).
@@ -545,6 +566,8 @@ def get_transactions(
                 query = query.filter(Transacao.data >= start_date)
             if end_date:
                 query = query.filter(Transacao.data <= end_date)
+            if tag:
+                query = query.filter(Transacao.tag == tag)
 
             transacoes = query.order_by(Transacao.data.desc()).all()
 
@@ -554,6 +577,56 @@ def get_transactions(
 
     except Exception as e:
         logger.error(f"Erro ao recuperar transações: {e}")
+        return []
+
+
+def get_all_tags() -> List[str]:
+    """
+    Retrieves all unique tags already used in transactions.
+
+    Handles CSV-formatted tags (e.g., 'Mãe,Saúde') by splitting and
+    deduplicating across all transactions.
+
+    Returns:
+        Sorted list of unique tag strings used in database.
+
+    Example:
+        >>> tags = get_all_tags()
+        >>> 'Mãe' in tags
+        True
+        >>> 'Saúde' in tags
+        True
+    """
+    try:
+        with get_db() as session:
+            tags_raw = (
+                session.query(Transacao.tag)
+                .filter(Transacao.tag.isnot(None))
+                .distinct()
+                .all()
+            )
+
+            # Coletar todas as tags individuais
+            todas_tags_set: set[str] = set()
+            for tag_tuple in tags_raw:
+                tag_str = tag_tuple[0] if tag_tuple else None
+                if tag_str:
+                    # Se houver vírgula, é CSV: splitá-la
+                    if "," in tag_str:
+                        tags_individuais = [
+                            t.strip() for t in tag_str.split(",") if t.strip()
+                        ]
+                        todas_tags_set.update(tags_individuais)
+                    else:
+                        # Tag simples
+                        todas_tags_set.add(tag_str.strip())
+
+            lista_tags = sorted(list(todas_tags_set))
+            logger.debug(f"Tags únicas recuperadas: {len(lista_tags)}")
+            return lista_tags
+
+    except Exception as e:
+        logger.error(f"Erro ao recuperar tags: {e}")
         return []
 
 
@@ -924,4 +997,142 @@ def get_category_matrix_data(
             "meses": [],
             "receitas": [],
             "despesas": [],
+        }
+
+
+def get_tag_matrix_data(months_past: int = 6, months_future: int = 6) -> Dict[str, Any]:
+    """
+    Gera matriz analítica de transações agrupadas por tag e mês.
+
+    Prepara dados para visualização de tabela cruzada onde linhas são
+    tags (entidades) e colunas são meses. Cada célula contém o saldo
+    líquido (receitas - despesas) daquela tag naquele mês.
+
+    Ignora transações com tag = NULL (queremos ver apenas entidades marcadas).
+
+    Para transações com múltiplas tags (ex: 'Mãe,Saúde'), a transação
+    é "explodida" e conta para CADA tag individualmente.
+
+    Args:
+        months_past: Número de meses para trás a partir de hoje (default 6).
+        months_future: Número de meses para frente a partir de hoje (default 6).
+
+    Returns:
+        Dict com estrutura:
+            {
+                "meses": ["2026-01", "2026-02", ...],
+                "tags": [
+                    {
+                        "nome": "Mãe",
+                        "valores": {"2026-01": 500.0, "2026-02": -200.0, ...}
+                    },
+                    ...
+                ]
+            }
+        Nota: Valores positivos = A receber, Negativos = A pagar.
+
+    Example:
+        >>> matriz = get_tag_matrix_data(months_past=3, months_future=3)
+        >>> print(matriz["meses"])
+        ['2025-10', '2025-11', '2025-12', '2026-01', '2026-02', '2026-03']
+        >>> print(len(matriz["tags"]))
+        3
+    """
+    try:
+        hoje = date.today()
+        data_inicio = hoje - relativedelta(months=months_past)
+        data_fim = hoje + relativedelta(months=months_future)
+
+        # Gerar lista de todos os meses no intervalo
+        meses_intervalo = []
+        data_atual = data_inicio.replace(day=1)
+
+        while data_atual <= data_fim:
+            mes_str = data_atual.strftime("%Y-%m")
+            meses_intervalo.append(mes_str)
+            data_atual = data_atual + relativedelta(months=1)
+
+        with get_db() as session:
+            # Query: Buscar transações COM tag no período (sem agregar)
+            transacoes = (
+                session.query(
+                    Transacao.tag,
+                    Transacao.data,
+                    Transacao.tipo,
+                    Transacao.valor,
+                )
+                .filter(
+                    Transacao.data >= data_inicio,
+                    Transacao.data <= data_fim,
+                    Transacao.tag.isnot(None),  # Ignorar tags NULL
+                )
+                .all()
+            )
+
+            # Estruturar dados: {tag: {mes: saldo_liquido}}
+            # Com processamento Python para suportar multi-tags
+            tags_dict: Dict[str, Dict[str, float]] = {}
+
+            for transacao_row in transacoes:
+                tag_str, data_transacao, tipo, valor = transacao_row
+
+                if not tag_str:
+                    continue
+
+                # Extrair mês
+                if hasattr(data_transacao, "strftime"):
+                    mes_key = data_transacao.strftime("%Y-%m")
+                else:
+                    # String ISO
+                    mes_key = str(data_transacao)[:7]
+
+                # Calcular saldo: receita positiva, despesa negativa
+                valor_sinal = float(valor) if tipo == "receita" else -float(valor)
+
+                # EXPLODIR: Se houver múltiplas tags, processar cada uma
+                if "," in tag_str:
+                    # CSV: Dividir por vírgula
+                    tags_individuais = [
+                        t.strip() for t in tag_str.split(",") if t.strip()
+                    ]
+                else:
+                    # Tag simples
+                    tags_individuais = [tag_str.strip()]
+
+                # Acumular a transação para CADA tag
+                for tag_individual in tags_individuais:
+                    if tag_individual not in tags_dict:
+                        tags_dict[tag_individual] = {
+                            mes: 0.0 for mes in meses_intervalo
+                        }
+
+                    if mes_key in tags_dict[tag_individual]:
+                        tags_dict[tag_individual][mes_key] += valor_sinal
+
+            # Converter para lista de tags com valores
+            tags_list = []
+            for tag_nome in sorted(tags_dict.keys()):
+                tags_list.append(
+                    {
+                        "nome": tag_nome,
+                        "valores": tags_dict[tag_nome],
+                    }
+                )
+
+            resultado = {
+                "meses": meses_intervalo,
+                "tags": tags_list,
+            }
+
+            logger.info(
+                f"Matriz de tags calculada: {len(tags_list)} tags, "
+                f"{len(meses_intervalo)} meses (com suporte a multi-tags)"
+            )
+            return resultado
+
+    except Exception as e:
+        logger.error(f"Erro ao calcular matriz de tags: {e}")
+        return {
+            "meses": [],
+            "tags": [],
         }

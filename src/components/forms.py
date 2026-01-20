@@ -106,10 +106,32 @@ def transaction_form(tipo: str) -> dbc.Card:
         className="mb-3",
     )
 
+    # Row 3.5: Tag (Opcional - ex: Mãe, Trabalho)
+    linha_tag = dbc.Row(
+        dbc.Col(
+            [
+                dbc.Label(
+                    "Tag (Opcional - ex: Mãe, Trabalho)",
+                    html_for=f"dropdown-{tipo}-tag",
+                ),
+                dcc.Dropdown(
+                    id=f"dropdown-{tipo}-tag",
+                    placeholder="Selecione ou digite tags",
+                    searchable=True,
+                    clearable=True,
+                    multi=True,
+                ),
+            ],
+            md=12,
+        ),
+        className="mb-3",
+    )
+
     linhas_formulario = [
         linha_valor_data,
         linha_descricao,
         linha_categoria,
+        linha_tag,
     ]
 
     # Row 4: Específicos por tipo (Despesa vs Receita)

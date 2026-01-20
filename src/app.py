@@ -17,16 +17,20 @@ from src.database.operations import (
     create_transaction,
     get_cash_flow_data,
     get_category_matrix_data,
+    get_tag_matrix_data,
     get_categories,
     create_category,
     delete_category,
     get_used_icons,
+    get_all_tags,
 )
 from src.components.dashboard import render_summary_cards
 from src.components.modals import render_transaction_modal
 from src.components.tables import render_transactions_table
 from src.components.cash_flow import render_cash_flow_table
 from src.components.category_manager import render_category_manager, EMOJI_OPTIONS
+from src.components.category_matrix import render_category_matrix
+from src.components.tag_matrix import render_tag_matrix
 from src.components.category_matrix import render_category_matrix
 
 logger = logging.getLogger(__name__)
@@ -152,6 +156,10 @@ app.layout = dbc.Container(
                 dcc.Tab(
                     label="� Análise",
                     value="tab-analise",
+                ),
+                dcc.Tab(
+                    label="🏷️ Tags",
+                    value="tab-tags",
                 ),
                 dcc.Tab(
                     label="�📁 Categorias",
@@ -362,6 +370,29 @@ def render_tab_content(
                     color="danger",
                 )
 
+        elif tab_value == "tab-tags":
+            logger.info("🏷️ Carregando matriz de tags...")
+            try:
+                matriz_tags_data = get_tag_matrix_data(
+                    months_past=months_past, months_future=months_future
+                )
+                logger.info("✓ Matriz de tags carregada com sucesso")
+                return dbc.Card(
+                    [
+                        dbc.CardHeader(
+                            html.H3("🏷️ Matriz de Tags - Saldo por Entidade")
+                        ),
+                        dbc.CardBody(render_tag_matrix(matriz_tags_data)),
+                    ],
+                    className="shadow-sm",
+                )
+            except Exception as e:
+                logger.error(f"✗ Erro ao carregar matriz de tags: {e}", exc_info=True)
+                return dbc.Alert(
+                    f"Erro ao carregar matriz de tags: {str(e)}",
+                    color="danger",
+                )
+
         elif tab_value == "tab-categorias":
             logger.info("📁 Carregando categorias...")
             try:
@@ -395,37 +426,40 @@ def render_tab_content(
         )
 
 
-# ===== CALLBACKS PARA DRILL-DOWN DE CATEGORIAS =====
+# ===== CALLBACKS PARA DRILL-DOWN (CATEGORIAS E TAGS) =====
 @app.callback(
     Output("modal-detalhes-categoria", "is_open"),
     Output("modal-categoria-titulo", "children"),
     Output("conteudo-modal-detalhes", "children"),
     Input({"type": "btn-cat-detail", "index": ALL}, "n_clicks"),
+    Input({"type": "btn-tag-detail", "index": ALL}, "n_clicks"),
     State("select-past", "value"),
     State("select-future", "value"),
     prevent_initial_call=True,
     allow_duplicate=True,
 )
 def open_category_detail_modal(
-    n_clicks_list: List[int],
+    n_clicks_cat_list: List[int],
+    n_clicks_tag_list: List[int],
     months_past: int,
     months_future: int,
 ) -> tuple:
     """
-    Abre modal com detalhes e transações de uma categoria específica.
+    Abre modal com detalhes de categoria OU tag com transações filtradas.
 
-    Quando o usuário clica em uma categoria na Matriz Analítica,
+    Este callback é polimórfico: aceita tanto cliques de categorias quanto de tags.
+    Identifica qual botão disparou e renderiza o conteúdo correspondente.
+
+    Quando o usuário clica em uma categoria/tag na Matriz Analítica,
     este callback:
-    1. Identifica qual categoria foi clicada
-    2. Busca as transações dessa categoria no período (sincronizado com matriz)
+    1. Identifica qual categoria/tag foi clicada
+    2. Busca as transações desse filtro no período
     3. Renderiza uma tabela com as transações
     4. Abre o modal
 
-    O cálculo de datas é idêntico ao de `get_cash_flow_data` para garantir
-    consistência entre matriz e modal.
-
     Args:
-        n_clicks_list: Lista de contagens de cliques dos botões.
+        n_clicks_cat_list: Lista de contagens de cliques dos botões de categoria.
+        n_clicks_tag_list: Lista de contagens de cliques dos botões de tag.
         months_past: Número de meses passados para filtro.
         months_future: Número de meses futuros para filtro.
 
@@ -438,15 +472,31 @@ def open_category_detail_modal(
             print("⚠️ Nenhum trigger detectado (ctx.triggered vazio)")
             raise PreventUpdate
 
-        if not any(n_clicks_list):
+        if not any(n_clicks_cat_list) and not any(n_clicks_tag_list):
             print("⚠️ Nenhum clique detectado (todos os n_clicks são None/0)")
             raise PreventUpdate
 
-        # ===== IDENTIFICAR CATEGORIA CLICADA =====
+        # ===== IDENTIFICAR TIPO DE TRIGGER (CATEGORIA OU TAG) =====
         trigger_id = ctx.triggered[0]["prop_id"]
-        categoria_id = eval(trigger_id.split(".")[0])["index"]
+        trigger_obj = eval(trigger_id.split(".")[0])
+        trigger_type = trigger_obj.get("type")
+        trigger_index = trigger_obj.get("index")
 
-        print(f"🕵️‍♂️ Drill-down acionado para Categoria ID: {categoria_id}")
+        is_categoria = trigger_type == "btn-cat-detail"
+        is_tag = trigger_type == "btn-tag-detail"
+
+        if is_categoria:
+            categoria_id = trigger_index
+            print(f"🕵️‍♂️ Drill-down acionado para Categoria ID: {categoria_id}")
+            filtro_nome = "categoria"
+        elif is_tag:
+            tag_name = trigger_index
+            print(f"🕵️‍♂️ Drill-down acionado para Tag: {tag_name}")
+            filtro_nome = "tag"
+        else:
+            print(f"❌ Tipo de trigger desconhecido: {trigger_type}")
+            raise PreventUpdate
+
         print(
             f"   Período solicitado: {months_past} meses passados, {months_future} meses futuros"
         )
@@ -476,59 +526,79 @@ def open_category_detail_modal(
         if todas_transacoes:
             print(f"🔍 Exemplo de transação: {todas_transacoes[0]}")
 
-        # ===== FILTRAR POR CATEGORIA EM PYTHON =====
-        # Converter categoria_id para int e filtrar com flexibilidade de tipo
-        cat_id_int: int
-        try:
-            cat_id_int = int(categoria_id)
-        except (ValueError, TypeError):
-            print(f"❌ Erro ao converter categoria_id para int: {categoria_id}")
-            raise PreventUpdate
-
-        # Construir lista filtrada acessando a estrutura aninhada de categoria
+        # ===== FILTRAR POR CATEGORIA OU TAG EM PYTHON =====
         transacoes_encontradas: List[Dict[str, Any]] = []
 
-        for t in todas_transacoes:
-            # Extrair ID da categoria da estrutura aninhada
-            cat_data = t.get("categoria") or {}  # Garante que é dict
-            t_cat_id = cat_data.get("id")
-
-            # Fallback: Se não achar no aninhado, tenta na raiz (compatibilidade)
-            if t_cat_id is None:
-                t_cat_id = t.get("categoria_id")
-
-            # Comparar IDs com segurança de tipo
+        if is_categoria:
+            # Filtrar por categoria
+            cat_id_int: int
             try:
-                if t_cat_id is not None and int(t_cat_id) == cat_id_int:
-                    transacoes_encontradas.append(t)
-                    # Log opcional (comentado para não poluir console)
-                    # print(f"🧐 Transação {t.get('id')}: Cat ID = {t_cat_id} ✓")
+                cat_id_int = int(categoria_id)
             except (ValueError, TypeError):
-                # Se não conseguir converter t_cat_id para int, pula
-                pass
+                print(f"❌ Erro ao converter categoria_id para int: {categoria_id}")
+                raise PreventUpdate
+
+            for t in todas_transacoes:
+                # Extrair ID da categoria da estrutura aninhada
+                cat_data = t.get("categoria") or {}  # Garante que é dict
+                t_cat_id = cat_data.get("id")
+
+                # Fallback: Se não achar no aninhado, tenta na raiz (compatibilidade)
+                if t_cat_id is None:
+                    t_cat_id = t.get("categoria_id")
+
+                # Comparar IDs com segurança de tipo
+                try:
+                    if t_cat_id is not None and int(t_cat_id) == cat_id_int:
+                        transacoes_encontradas.append(t)
+                except (ValueError, TypeError):
+                    pass
+
+        elif is_tag:
+            # Filtrar por tag com busca parcial (contém)
+            # Suporta tags simples ("Mãe") e multi-tag ("Mãe,Saúde")
+            for t in todas_transacoes:
+                tag_str = t.get("tag") or ""
+                # Split por vírgula para suportar CSV
+                tags_transacao = [
+                    tag.strip() for tag in tag_str.split(",") if tag.strip()
+                ]
+                # Verifica se a tag procurada está na lista
+                if tag_name in tags_transacao:
+                    transacoes_encontradas.append(t)
 
         print(
-            f"🎯 Filtrado para Categoria {cat_id_int}: {len(transacoes_encontradas)} encontrados."
+            f"🎯 Filtrado para {filtro_nome} '{categoria_id if is_categoria else tag_name}': "
+            f"{len(transacoes_encontradas)} encontrados."
         )
 
-        # ===== BUSCAR CATEGORIA =====
-        categorias = get_categories()
-        categoria = next((c for c in categorias if c.get("id") == categoria_id), None)
+        # ===== BUSCAR NOME/LABEL DO FILTRO =====
+        if is_categoria:
+            # Buscar categoria no banco
+            categorias = get_categories()
+            categoria = next(
+                (c for c in categorias if c.get("id") == categoria_id), None
+            )
 
-        if not categoria:
-            print(f"❌ Categoria ID {categoria_id} não encontrada no banco")
-            raise PreventUpdate
+            if not categoria:
+                print(f"❌ Categoria ID {categoria_id} não encontrada no banco")
+                raise PreventUpdate
 
-        categoria_nome = categoria.get("nome", "Desconhecida")
-        categoria_icon = categoria.get("icone", "📊")
+            categoria_nome = categoria.get("nome", "Desconhecida")
+            categoria_icon = categoria.get("icone", "📊")
 
-        print(f"✅ Categoria encontrada: {categoria_icon} {categoria_nome}")
+            print(f"✅ Categoria encontrada: {categoria_icon} {categoria_nome}")
+            titulo_label = f"{categoria_icon} {categoria_nome}"
+
+        elif is_tag:
+            print(f"✅ Tag encontrada: {tag_name}")
+            titulo_label = f"🏷️ {tag_name}"
 
         # ===== RENDERIZAR CONTEÚDO DO MODAL =====
         if not transacoes_encontradas:
-            print(f"ℹ️  Nenhuma transação para {categoria_nome} no período")
+            print(f"ℹ️  Nenhuma transação para {titulo_label} no período")
             tabela_conteudo = dbc.Alert(
-                f"Nenhuma transação encontrada para {categoria_nome} "
+                f"Nenhuma transação encontrada para {titulo_label} "
                 f"no período de {start_date.strftime('%d/%m/%Y')} "
                 f"até {end_date.strftime('%d/%m/%Y')}.",
                 color="info",
@@ -542,12 +612,12 @@ def open_category_detail_modal(
                 meses_headers.append(mes_str)
                 data_atual = data_atual + relativedelta(months=1)
 
-            # ===== CONSTRUIR PIVOT TABLE (Descrição x Mês) =====
-            # dados_matrix[descrição][mês] = valor
+            # ===== CONSTRUIR EXTRATO (Descrição x Mês com Saldos) =====
+            # dados_matrix[row_key][mês] = valor (com sinal: receita positiva, despesa negativa)
             dados_matrix: Dict[str, Dict[str, float]] = defaultdict(
                 lambda: defaultdict(float)
             )
-            tipo_transacao: Dict[str, str] = {}  # Rastrear tipo para colorir
+            totais_por_mes: Dict[str, float] = defaultdict(float)
 
             for transacao in transacoes_encontradas:
                 # Extrair data em formato YYYY-MM
@@ -571,12 +641,19 @@ def open_category_detail_modal(
                 descricao = transacao.get("descricao", "")
                 desc_limpa = re.sub(r"\s*\(Recorrência #\d+\)", "", descricao)
 
-                # Agregar valor
+                # Extrair valor e tipo
                 valor = transacao.get("valor", 0.0)
                 tipo = transacao.get("tipo", "")
 
-                dados_matrix[desc_limpa][mes_key] += valor
-                tipo_transacao[desc_limpa] = tipo  # Rastreia tipo da descrição
+                # Aplicar sinal: despesa negativa, receita positiva
+                valor_com_sinal = valor if tipo == "receita" else -valor
+
+                # Criar chave de linha: descrição com tipo (para separar receita/despesa)
+                row_key = f"{desc_limpa} ({tipo})"
+
+                # Agregar na matriz e totais
+                dados_matrix[row_key][mes_key] += valor_com_sinal
+                totais_por_mes[mes_key] += valor_com_sinal
 
             # ===== CONSTRUIR CABEÇALHO DA TABELA =====
             header_cells = [html.Th("Descrição", className="text-nowrap fw-bold")]
@@ -592,18 +669,23 @@ def open_category_detail_modal(
 
             cabecalho = html.Thead(html.Tr(header_cells, className="table-light"))
 
-            # ===== CONSTRUIR CORPO DA TABELA =====
+            # ===== CONSTRUIR CORPO DA TABELA (Extrato) =====
             linhas = []
-            for desc_limpa in sorted(dados_matrix.keys()):
-                valores_por_mes = dados_matrix[desc_limpa]
-                tipo = tipo_transacao.get(desc_limpa, "")
+            for row_key in sorted(dados_matrix.keys()):
+                valores_por_mes = dados_matrix[row_key]
 
-                # Determinar cor baseada no tipo
-                cor_texto = "text-success" if tipo == "receita" else "text-danger"
+                # Determinar cor baseada no valor (positivo=verde, negativo=vermelho)
+                def get_cor_valor(val: float) -> str:
+                    if val > 0:
+                        return "text-success"
+                    elif val < 0:
+                        return "text-danger"
+                    else:
+                        return "text-muted"
 
                 # Célula de descrição
                 desc_cell = html.Td(
-                    desc_limpa,
+                    row_key,
                     className="fw-bold",
                     style={"minWidth": "150px"},
                 )
@@ -623,12 +705,15 @@ def open_category_detail_modal(
                             )
                         )
                     else:
-                        # Com valor: formatar em R$
+                        # Com valor: formatar em R$ (com sinal)
+                        sinal = "-" if valor < 0 else ""
+                        valor_abs = abs(valor)
                         valor_fmt = (
-                            f"R$ {valor:,.2f}".replace(",", "X")
+                            f"{sinal}R$ {valor_abs:,.2f}".replace(",", "X")
                             .replace(".", ",")
                             .replace("X", ".")
                         )
+                        cor_texto = get_cor_valor(valor)
                         valor_cells.append(
                             html.Td(
                                 valor_fmt,
@@ -644,6 +729,47 @@ def open_category_detail_modal(
                     )
                 )
 
+            # ===== ADICIONAR LINHA DE SALDO =====
+            saldo_cells = [
+                html.Td(
+                    "=== SALDO ===",
+                    className="fw-bold text-nowrap",
+                    style={"minWidth": "150px"},
+                )
+            ]
+
+            for mes in meses_headers:
+                saldo_mes = totais_por_mes.get(mes, 0.0)
+
+                if saldo_mes == 0.0:
+                    saldo_fmt = "-"
+                    cor_saldo = "text-muted"
+                else:
+                    sinal = "-" if saldo_mes < 0 else ""
+                    saldo_abs = abs(saldo_mes)
+                    saldo_fmt = (
+                        f"{sinal}R$ {saldo_abs:,.2f}".replace(",", "X")
+                        .replace(".", ",")
+                        .replace("X", ".")
+                    )
+                    cor_saldo = "text-success" if saldo_mes > 0 else "text-danger"
+
+                saldo_cells.append(
+                    html.Td(
+                        saldo_fmt,
+                        className=f"text-end text-nowrap fw-bold {cor_saldo}",
+                        style={"minWidth": "70px"},
+                    )
+                )
+
+            # Linha de saldo com destaque
+            linhas.append(
+                html.Tr(
+                    saldo_cells,
+                    className="table-active fw-bold border-top border-3",
+                )
+            )
+
             corpo = html.Tbody(linhas)
             tabela_conteudo = dbc.Table(
                 [cabecalho, corpo],
@@ -656,7 +782,7 @@ def open_category_detail_modal(
             )
 
         # Título do modal
-        titulo = html.Span(f"{categoria_icon} {categoria_nome}")
+        titulo = html.Span(titulo_label)
 
         print(
             f"✅ Modal renderizado com sucesso ({len(transacoes_encontradas)} transações)"
@@ -668,9 +794,9 @@ def open_category_detail_modal(
         raise
     except Exception as e:
         erro_traceback = traceback.format_exc()
-        print(f"❌ ERRO ao abrir detalhes da categoria:")
+        print(f"❌ ERRO ao abrir detalhes:")
         print(erro_traceback)
-        logger.error(f"Erro ao abrir detalhes da categoria: {e}", exc_info=True)
+        logger.error(f"Erro ao abrir detalhes: {e}", exc_info=True)
         return (
             True,
             "❌ Erro",
@@ -1032,6 +1158,120 @@ def update_category_dropdowns(modal_is_open: bool, store_data: float):
 
 
 @app.callback(
+    Output("dropdown-receita-tag", "options"),
+    Output("dropdown-despesa-tag", "options"),
+    Input("modal-transacao", "is_open"),
+    Input("store-transacao-salva", "data"),
+    Input("dropdown-receita-tag", "search_value"),
+    Input("dropdown-despesa-tag", "search_value"),
+    Input("dropdown-receita-tag", "value"),
+    Input("dropdown-despesa-tag", "value"),
+    prevent_initial_call=False,
+    allow_duplicate=True,
+)
+def update_tag_dropdowns(
+    modal_is_open: bool,
+    store_data: float,
+    search_value_receita: Optional[str],
+    search_value_despesa: Optional[str],
+    current_value_receita: Optional[list],
+    current_value_despesa: Optional[list],
+):
+    """
+    Atualiza as opções dos dropdowns de tags no modal (com suporte a multi=True).
+
+    Carrega tags únicas do banco (desagrupando tags CSV) e permite criação
+    dinâmica de novas tags. Persiste valores selecionados (mesmo que ainda não
+    estejam no banco) para evitar que tags recém-criadas desapareçam.
+
+    Suporta seleção múltipla: current_value_* agora é uma lista (ou None).
+
+    Args:
+        modal_is_open: Se o modal está aberto.
+        store_data: Timestamp da última transação salva (sinal).
+        search_value_receita: Texto digitado no dropdown de receita (creatable).
+        search_value_despesa: Texto digitado no dropdown de despesa (creatable).
+        current_value_receita: Lista de tags selecionadas em receita (ou None).
+        current_value_despesa: Lista de tags selecionadas em despesa (ou None).
+
+    Returns:
+        Tuple (opcoes_receita, opcoes_despesa).
+    """
+    logger.debug(
+        f"🔄 Atualizando dropdowns de tags (modal_open={modal_is_open}, signal={store_data})"
+    )
+
+    try:
+        # Buscar tags já existentes no banco
+        tags_db = get_all_tags()
+
+        # Criar lista base de opções
+        base_options = [{"label": tag, "value": tag} for tag in tags_db]
+
+        # Função auxiliar para adicionar valores dinamicamente
+        def build_options(
+            base_opts: List[Dict],
+            current_value: Optional[list],
+            search_value: Optional[str],
+            tags_banco: List[str],
+        ) -> List[Dict]:
+            """
+            Constrói lista de opções, adicionando valores dinamicamente criados.
+
+            Suporta seleção múltipla: current_value é uma lista de tags selecionadas.
+
+            Args:
+                base_opts: Lista base de opções do banco.
+                current_value: Lista de tags atualmente selecionadas (ou None).
+                search_value: Texto digitado pelo usuário.
+                tags_banco: Tags existentes no banco (desagrupadas).
+
+            Returns:
+                Lista de opções com valores dinâmicos inclusos.
+            """
+            options = base_opts.copy()
+            values_to_check: set[str] = set()
+
+            # Adicionar valores atuais selecionados se existirem
+            # (multi=True retorna uma lista)
+            if current_value and isinstance(current_value, list):
+                for valor in current_value:
+                    if valor and valor.strip() and valor not in tags_banco:
+                        values_to_check.add(valor.strip())
+
+            # Adicionar valor digitado se existir
+            if search_value and search_value.strip() and search_value not in tags_banco:
+                values_to_check.add(search_value.strip())
+
+            # Adicionar valores únicos às opções
+            for value in values_to_check:
+                if not any(opt["value"] == value for opt in options):
+                    options.append({"label": value, "value": value})
+                    logger.debug(f"✏️ Tag adicionada dinamicamente: {value}")
+
+            return options
+
+        # Opções para Receita
+        options_receita = build_options(
+            base_options, current_value_receita, search_value_receita, tags_db
+        )
+
+        # Opções para Despesa
+        options_despesa = build_options(
+            base_options, current_value_despesa, search_value_despesa, tags_db
+        )
+
+        logger.debug(
+            f"✓ Dropdowns de tags atualizados: {len(base_options)} base + dinâmicas"
+        )
+        return options_receita, options_despesa
+
+    except Exception as e:
+        logger.error(f"✗ Erro ao atualizar dropdowns de tags: {e}", exc_info=True)
+        return [], []
+
+
+@app.callback(
     Output("alerta-modal", "is_open"),
     Output("alerta-modal", "children"),
     Output("modal-transacao", "is_open", allow_duplicate=True),
@@ -1042,6 +1282,7 @@ def update_category_dropdowns(modal_is_open: bool, store_data: float):
     State("dcc-receita-data", "date"),
     State("dcc-receita-categoria", "value"),
     State("input-receita-origem", "value"),
+    State("dropdown-receita-tag", "value"),
     State("check-receita-recorrente", "value"),
     State("select-receita-frequencia", "value"),
     State("modal-transacao", "is_open"),
@@ -1055,6 +1296,7 @@ def save_receita(
     data: str,
     categoria_id: int,
     pessoa_origem: str,
+    tag: Optional[list],
     is_recorrente: List,
     frequencia_recorrencia: str,
     modal_is_open: bool,
@@ -1062,8 +1304,9 @@ def save_receita(
     """
     Salva uma nova receita no banco de dados.
 
-    Suporta recorrência. Atualiza store-transacao-salva ao salvar com sucesso,
-    sinalizando a atualização dos componentes dependentes (Fluxo de Caixa, Abas).
+    Suporta recorrência e associação a tags múltiplas. Atualiza store-transacao-salva
+    ao salvar com sucesso, sinalizando a atualização dos componentes dependentes
+    (Fluxo de Caixa, Abas).
 
     Args:
         n_clicks: Número de cliques no botão.
@@ -1072,6 +1315,8 @@ def save_receita(
         data: Data em formato YYYY-MM-DD.
         categoria_id: ID da categoria.
         pessoa_origem: Pessoa/entidade de origem.
+        tag: Tags opcionais para entidade/agrupamento (ex: ['Mãe', 'Saúde']).
+             Pode ser uma lista (multi=True) ou None. Será salvo como CSV se houver múltiplas.
         is_recorrente: Lista com valor 1 se recorrente, vazia se não.
         frequencia_recorrencia: Frequência (mensal, quinzenal, semanal).
         modal_is_open: Estado atual do modal.
@@ -1080,7 +1325,7 @@ def save_receita(
         Tuple (alerta_aberto, mensagem_alerta, modal_aberto, timestamp).
     """
 
-    logger.info(f"💾 Salvando receita: {descricao} - R${valor}")
+    logger.info(f"💾 Salvando receita: {descricao} - R${valor} (tag={tag})")
 
     if not all([valor, descricao, data, categoria_id]):
         msg_erro = "❌ Preencha todos os campos obrigatórios!"
@@ -1100,6 +1345,7 @@ def save_receita(
             data=data_obj,
             categoria_id=int(categoria_id),
             pessoa_origem=pessoa_origem,
+            tag=tag,
             is_recorrente=eh_recorrente,
             frequencia_recorrencia=frequencia_recorrencia if eh_recorrente else None,
         )
@@ -1132,6 +1378,7 @@ def save_receita(
     State("dcc-despesa-categoria", "value"),
     State("select-despesa-pagamento", "value"),
     State("input-despesa-parcelas", "value"),
+    State("dropdown-despesa-tag", "value"),
     State("check-despesa-recorrente", "value"),
     State("select-despesa-frequencia", "value"),
     State("modal-transacao", "is_open"),
@@ -1146,6 +1393,7 @@ def save_despesa(
     categoria_id: int,
     forma_pagamento: str,
     numero_parcelas: int,
+    tag: Optional[list],
     is_recorrente: List,
     frequencia_recorrencia: str,
     modal_is_open: bool,
@@ -1153,9 +1401,9 @@ def save_despesa(
     """
     Salva uma nova despesa no banco de dados.
 
-    Suporta parcelamento, forma de pagamento e recorrência. Atualiza
-    store-transacao-salva ao salvar com sucesso, sinalizando a atualização
-    dos componentes dependentes (Fluxo de Caixa, Abas).
+    Suporta parcelamento, forma de pagamento, recorrência e associação a tags
+    múltiplas. Atualiza store-transacao-salva ao salvar com sucesso, sinalizando
+    a atualização dos componentes dependentes (Fluxo de Caixa, Abas).
 
     Args:
         n_clicks: Número de cliques no botão.
@@ -1165,6 +1413,8 @@ def save_despesa(
         categoria_id: ID da categoria.
         forma_pagamento: Forma de pagamento (dinheiro, pix, credito, etc).
         numero_parcelas: Número de parcelas (default 1).
+        tag: Tags opcionais para entidade/agrupamento (ex: ['Mãe', 'Saúde']).
+             Pode ser uma lista (multi=True) ou None. Será salvo como CSV se houver múltiplas.
         is_recorrente: Lista com valor 1 se recorrente, vazia se não.
         frequencia_recorrencia: Frequência (mensal, quinzenal, semanal).
         modal_is_open: Estado atual do modal.
@@ -1173,7 +1423,7 @@ def save_despesa(
         Tuple (alerta_aberto, mensagem_alerta, modal_aberto, timestamp).
     """
 
-    logger.info(f"💾 Salvando despesa: {descricao} - R${valor}")
+    logger.info(f"💾 Salvando despesa: {descricao} - R${valor} (tag={tag})")
 
     if not all([valor, descricao, data, categoria_id]):
         msg_erro = "❌ Preencha todos os campos obrigatórios!"
@@ -1197,6 +1447,7 @@ def save_despesa(
             categoria_id=int(categoria_id),
             forma_pagamento=forma_pagamento,
             numero_parcelas=num_parcelas,
+            tag=tag,
             is_recorrente=eh_recorrente,
             frequencia_recorrencia=frequencia_recorrencia if eh_recorrente else None,
         )

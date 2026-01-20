@@ -56,6 +56,7 @@ def render_transactions_table(transacoes: List[Dict]) -> dbc.Table | dbc.Alert:
             "descricao",
             "valor",
             "tipo",
+            "tag",
             "tags",
         ]
 
@@ -81,6 +82,14 @@ def render_transactions_table(transacoes: List[Dict]) -> dbc.Table | dbc.Alert:
                 lambda x: x["nome"] if isinstance(x, dict) else x
             )
 
+        # Tratar tag como vazia se for None
+        if "tag" in df.columns:
+            df["tag"] = (
+                df["tag"]
+                .fillna("-")
+                .apply(lambda x: str(x) if x and x != "None" else "-")
+            )
+
         # Renomear colunas para português
         df = df.rename(
             columns={
@@ -89,6 +98,7 @@ def render_transactions_table(transacoes: List[Dict]) -> dbc.Table | dbc.Alert:
                 "descricao": "Descrição",
                 "valor": "Valor",
                 "tipo": "Tipo",
+                "tag": "Tag",
                 "tags": "Tags",
             }
         )
