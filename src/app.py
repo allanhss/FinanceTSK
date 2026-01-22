@@ -8,6 +8,7 @@ from dateutil.relativedelta import relativedelta
 from typing import Any, Dict, List, Optional
 
 import dash_bootstrap_components as dbc
+import dash
 from dash import Dash, dcc, html, Input, Output, State, MATCH, ALL, ctx, no_update
 from dash.exceptions import PreventUpdate
 
@@ -32,7 +33,15 @@ from src.components.cash_flow import render_cash_flow_table
 from src.components.category_manager import render_category_manager, EMOJI_OPTIONS
 from src.components.category_matrix import render_category_matrix
 from src.components.tag_matrix import render_tag_matrix
-from src.components.budget_progress import render_budget_progress
+from src.components.budget_progress import (
+    render_budget_progress,
+    render_budget_dashboard,
+    render_budget_matrix,
+)
+from src.components.dashboard_charts import (
+    render_evolution_chart,
+    render_top_expenses_chart,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,130 +54,184 @@ app = Dash(
 app.title = "FinanceTSK - Gestor Financeiro"
 
 
-app.layout = dbc.Container(
+app.layout = html.Div(
     [
-        dbc.NavbarSimple(
-            children=[
-                dbc.Nav(
+        dcc.Location(id="url", refresh=False),
+        dbc.Container(
+            [
+                dbc.Row(
                     [
-                        dbc.NavLink("Dashboard", href="/", active="exact"),
-                        dbc.NavLink("Receitas", href="/receitas", active="exact"),
-                        dbc.NavLink("Despesas", href="/despesas", active="exact"),
-                        dbc.NavLink("Categorias", href="/categorias", active="exact"),
+                        # ===== SIDEBAR (Coluna 1) =====
+                        dbc.Col(
+                            [
+                                html.Div(
+                                    [
+                                        # Cabeçalho da Sidebar
+                                        html.H4(
+                                            "💰 FinanceTSK",
+                                            className="fw-bold text-primary",
+                                        ),
+                                        html.Hr(),
+                                        # Ações Rápidas
+                                        dbc.Button(
+                                            "+ Receita",
+                                            id="btn-nova-receita",
+                                            color="success",
+                                            size="md",
+                                            className="w-100 mb-2",
+                                        ),
+                                        dbc.Button(
+                                            "+ Despesa",
+                                            id="btn-nova-despesa",
+                                            color="danger",
+                                            size="md",
+                                            className="w-100 mb-4",
+                                        ),
+                                        # Seção: Lançamentos
+                                        html.P(
+                                            "Lançamentos",
+                                            className="fw-bold text-muted small",
+                                        ),
+                                        dbc.Nav(
+                                            [
+                                                dbc.NavLink(
+                                                    "📊 Dashboard",
+                                                    href="/",
+                                                    active="exact",
+                                                ),
+                                                dbc.NavLink(
+                                                    "💰 Receitas",
+                                                    href="/receitas",
+                                                    active="exact",
+                                                ),
+                                                dbc.NavLink(
+                                                    "💸 Despesas",
+                                                    href="/despesas",
+                                                    active="exact",
+                                                ),
+                                            ],
+                                            vertical=True,
+                                            pills=True,
+                                            className="mb-4",
+                                        ),
+                                        # Seção: Inteligência
+                                        html.P(
+                                            "Inteligência",
+                                            className="fw-bold text-muted small",
+                                        ),
+                                        dbc.Nav(
+                                            [
+                                                dbc.NavLink(
+                                                    "🎯 Orçamento",
+                                                    href="/orcamento",
+                                                    active="exact",
+                                                ),
+                                                dbc.NavLink(
+                                                    "📈 Análise",
+                                                    href="/analise",
+                                                    active="exact",
+                                                ),
+                                                dbc.NavLink(
+                                                    "🏷️ Tags",
+                                                    href="/tags",
+                                                    active="exact",
+                                                ),
+                                            ],
+                                            vertical=True,
+                                            pills=True,
+                                            className="mb-4",
+                                        ),
+                                        # Seção: Configuração
+                                        html.P(
+                                            "Configuração",
+                                            className="fw-bold text-muted small",
+                                        ),
+                                        dbc.Nav(
+                                            [
+                                                dbc.NavLink(
+                                                    "📁 Categorias",
+                                                    href="/categorias",
+                                                    active="exact",
+                                                ),
+                                            ],
+                                            vertical=True,
+                                            pills=True,
+                                            className="mb-4",
+                                        ),
+                                        # Divisor
+                                        html.Hr(),
+                                        # Filtros Globais (Footer da Sidebar)
+                                        html.P(
+                                            "Horizonte Temporal",
+                                            className="fw-bold text-muted small",
+                                        ),
+                                        dbc.Label(
+                                            "Meses Passados:",
+                                            html_for="select-past",
+                                            className="small mb-2",
+                                        ),
+                                        dcc.Dropdown(
+                                            id="select-past",
+                                            options=[
+                                                {"label": "Nenhum", "value": 0},
+                                                {"label": "1 mês", "value": 1},
+                                                {"label": "3 meses", "value": 3},
+                                                {"label": "6 meses", "value": 6},
+                                                {"label": "12 meses", "value": 12},
+                                            ],
+                                            value=3,
+                                            className="mb-3",
+                                        ),
+                                        dbc.Label(
+                                            "Meses Futuros:",
+                                            html_for="select-future",
+                                            className="small mb-2",
+                                        ),
+                                        dcc.Dropdown(
+                                            id="select-future",
+                                            options=[
+                                                {"label": "Nenhum", "value": 0},
+                                                {"label": "1 mês", "value": 1},
+                                                {"label": "3 meses", "value": 3},
+                                                {"label": "6 meses", "value": 6},
+                                                {"label": "12 meses", "value": 12},
+                                            ],
+                                            value=6,
+                                        ),
+                                    ],
+                                    className="p-3",
+                                    style={
+                                        "backgroundColor": "#f8f9fa",
+                                        "borderRadius": "0.25rem",
+                                        "height": "100vh",
+                                        "overflowY": "auto",
+                                        "position": "sticky",
+                                        "top": 0,
+                                    },
+                                )
+                            ],
+                            width=2,
+                            className="border-end",
+                        ),
+                        # ===== ÁREA DE CONTEÚDO (Coluna 2) =====
+                        dbc.Col(
+                            [
+                                html.Div(
+                                    id="page-content",
+                                    className="p-4",
+                                )
+                            ],
+                            width=10,
+                        ),
                     ],
-                    className="ms-auto",
-                    navbar=True,
+                    className="g-0",
+                    style={"minHeight": "100vh"},
                 )
             ],
-            brand="💰 FinanceTSK",
-            brand_href="/",
-            color="primary",
-            dark=True,
-            className="mb-4",
+            fluid=True,
+            className="p-0",
         ),
-        dcc.Location(id="url", refresh=False),
-        dbc.Row(
-            [
-                dbc.Col(
-                    [
-                        dbc.Label("Meses Passados:", html_for="select-past"),
-                        dcc.Dropdown(
-                            id="select-past",
-                            options=[
-                                {"label": "Nenhum", "value": 0},
-                                {"label": "1 mês", "value": 1},
-                                {"label": "3 meses", "value": 3},
-                                {"label": "6 meses", "value": 6},
-                                {"label": "12 meses", "value": 12},
-                            ],
-                            value=3,
-                        ),
-                    ],
-                    md=6,
-                    className="mb-3",
-                ),
-                dbc.Col(
-                    [
-                        dbc.Label("Meses Futuros:", html_for="select-future"),
-                        dcc.Dropdown(
-                            id="select-future",
-                            options=[
-                                {"label": "Nenhum", "value": 0},
-                                {"label": "1 mês", "value": 1},
-                                {"label": "3 meses", "value": 3},
-                                {"label": "6 meses", "value": 6},
-                                {"label": "12 meses", "value": 12},
-                            ],
-                            value=6,
-                        ),
-                    ],
-                    md=6,
-                    className="mb-3",
-                ),
-            ],
-            className="mb-4",
-        ),
-        html.Div(
-            id="cash-flow-container",
-            children=render_cash_flow_table([]),
-            style={"overflowX": "auto"},
-            className="mb-4",
-        ),
-        dbc.Row(
-            [
-                dbc.Col(
-                    dbc.Button(
-                        "+ Receita",
-                        id="btn-nova-receita",
-                        color="success",
-                        size="lg",
-                        className="mb-3 w-100",
-                    ),
-                    md=6,
-                ),
-                dbc.Col(
-                    dbc.Button(
-                        "+ Despesa",
-                        id="btn-nova-despesa",
-                        color="danger",
-                        size="lg",
-                        className="mb-3 w-100",
-                    ),
-                    md=6,
-                ),
-            ]
-        ),
-        dcc.Tabs(
-            id="tabs-principal",
-            value="tab-dashboard",
-            children=[
-                dcc.Tab(
-                    label="📊 Dashboard",
-                    value="tab-dashboard",
-                ),
-                dcc.Tab(
-                    label="💰 Receitas",
-                    value="tab-receitas",
-                ),
-                dcc.Tab(
-                    label="💸 Despesas",
-                    value="tab-despesas",
-                ),
-                dcc.Tab(
-                    label="� Análise",
-                    value="tab-analise",
-                ),
-                dcc.Tab(
-                    label="🏷️ Tags",
-                    value="tab-tags",
-                ),
-                dcc.Tab(
-                    label="�📁 Categorias",
-                    value="tab-categorias",
-                ),
-            ],
-        ),
-        html.Div(id="conteudo-abas", className="mt-4"),
+        # ===== MODALS E STORES =====
         render_transaction_modal(is_open=False),
         dbc.Modal(
             [
@@ -195,225 +258,422 @@ app.layout = dbc.Container(
             data=0,
         ),
         html.Div(id="dummy-output", style={"display": "none"}),
-        html.Hr(className="mt-5"),
-        html.Footer(
-            "FinanceTSK v1.0 | Gestor Financeiro Pessoal",
-            className="text-center text-muted mt-4 mb-3",
-        ),
     ],
-    fluid=True,
-    className="pt-4",
+    style={"margin": 0, "padding": 0},
 )
 
 
-@app.callback(
-    Output("cash-flow-container", "children"),
-    Input("select-past", "value"),
-    Input("select-future", "value"),
-    Input("store-transacao-salva", "data"),
-    prevent_initial_call=False,
-    allow_duplicate=True,
-)
-def update_cash_flow(
-    months_past: int, months_future: int, store_data: float
-) -> dbc.Card:
+# ===== FUNÇÕES DE RENDERIZAÇÃO DE PÁGINAS =====
+
+
+def render_dashboard_page(months_past: int, months_future: int) -> dbc.Container:
     """
-    Atualiza a tabela de Fluxo de Caixa baseado nos controles de horizonte temporal.
+    Renderiza a página do Dashboard com resumo financeiro, gráficos e fluxo de caixa.
 
-    Recarrega os dados sempre que o usuário muda os seletores de meses passados/futuros
-    ou quando uma transação é salva com sucesso (via store-transacao-salva).
-
-    O padrão Store/Signal elimina a condição de corrida onde o callback de leitura
-    disparava antes do término da gravação no banco.
+    Exibe:
+    - Cards de resumo (Total Receitas, Despesas, Saldo)
+    - Gráficos: Evolução financeira (barras + linha) e Top 5 despesas (rosca)
+    - Tabela de Fluxo de Caixa detalhada
 
     Args:
-        months_past: Número de meses para trás (padrão 3).
-        months_future: Número de meses para frente (padrão 6).
-        store_data: Timestamp da última transação salva (sinal de sincronização).
+        months_past: Número de meses passados para análise.
+        months_future: Número de meses futuros para análise.
 
     Returns:
-        dbc.Card com a tabela de fluxo de caixa atualizada.
+        Componente do Dash com o dashboard renderizado.
     """
     logger.info(
-        f"🔄 Atualizando Fluxo de Caixa: {months_past} meses passados, "
-        f"{months_future} meses futuros (signal={store_data})"
+        f"📊 Renderizando Dashboard: {months_past} meses passados, "
+        f"{months_future} meses futuros"
     )
 
     try:
+        # Buscar dados de fluxo de caixa
         fluxo_data = get_cash_flow_data(
             months_past=months_past, months_future=months_future
         )
-        tabela = render_cash_flow_table(fluxo_data)
-        logger.info("✓ Fluxo de caixa renderizado com sucesso")
-        return tabela
 
-    except Exception as e:
-        logger.error(f"✗ Erro ao atualizar fluxo de caixa: {e}", exc_info=True)
-        return dbc.Card(
+        # Buscar dados para matriz (gráfico de evolução)
+        matriz_data = get_category_matrix_data(
+            months_past=months_past, months_future=months_future
+        )
+
+        # Buscar transações para resumo
+        transacoes = get_transactions()
+        receitas = [t for t in transacoes if t.get("tipo") == "receita"]
+        despesas = [t for t in transacoes if t.get("tipo") == "despesa"]
+
+        total_receitas = sum(float(t.get("valor", 0)) for t in receitas)
+        total_despesas = sum(float(t.get("valor", 0)) for t in despesas)
+        saldo = total_receitas - total_despesas
+
+        # Buscar despesas do mês atual para gráfico de rosca
+        mes_atual = datetime.now()
+        primeiro_dia_mes = date(mes_atual.year, mes_atual.month, 1)
+        if mes_atual.month == 12:
+            ultimo_dia_mes = date(mes_atual.year + 1, 1, 1) - relativedelta(days=1)
+        else:
+            ultimo_dia_mes = date(mes_atual.year, mes_atual.month + 1, 1) - relativedelta(days=1)
+        
+        transacoes_mes_atual = get_transactions(
+            start_date=primeiro_dia_mes, end_date=ultimo_dia_mes
+        )
+        despesas_mes_atual = [
+            t for t in transacoes_mes_atual if t.get("tipo") == "despesa"
+        ]
+
+        logger.info(
+            f"✓ Dashboard data: Receitas={total_receitas}, Despesas={total_despesas}, Saldo={saldo}"
+        )
+
+        return dbc.Container(
             [
-                dbc.CardHeader(html.H5("💰 Fluxo de Caixa")),
-                dbc.CardBody(
-                    dbc.Alert(
-                        f"Erro ao carregar fluxo de caixa: {str(e)}",
-                        color="danger",
-                        className="mb-0",
-                    )
+                # Título
+                html.H2("Dashboard Financeiro", className="mb-4 fw-bold"),
+                # Cards de Resumo (KPI)
+                dbc.Row(
+                    [
+                        dbc.Col(
+                            dbc.Card(
+                                [
+                                    dbc.CardBody(
+                                        [
+                                            html.H6(
+                                                "Total Receitas",
+                                                className="text-muted",
+                                            ),
+                                            html.H3(
+                                                f"R$ {total_receitas:,.2f}",
+                                                className="text-success fw-bold",
+                                            ),
+                                        ]
+                                    )
+                                ],
+                                className="shadow-sm",
+                            ),
+                            md=4,
+                            className="mb-3",
+                        ),
+                        dbc.Col(
+                            dbc.Card(
+                                [
+                                    dbc.CardBody(
+                                        [
+                                            html.H6(
+                                                "Total Despesas",
+                                                className="text-muted",
+                                            ),
+                                            html.H3(
+                                                f"R$ {total_despesas:,.2f}",
+                                                className="text-danger fw-bold",
+                                            ),
+                                        ]
+                                    )
+                                ],
+                                className="shadow-sm",
+                            ),
+                            md=4,
+                            className="mb-3",
+                        ),
+                        dbc.Col(
+                            dbc.Card(
+                                [
+                                    dbc.CardBody(
+                                        [
+                                            html.H6(
+                                                "Saldo",
+                                                className="text-muted",
+                                            ),
+                                            html.H3(
+                                                f"R$ {saldo:,.2f}",
+                                                className=(
+                                                    "text-info fw-bold"
+                                                    if saldo >= 0
+                                                    else "text-warning fw-bold"
+                                                ),
+                                            ),
+                                        ]
+                                    )
+                                ],
+                                className="shadow-sm",
+                            ),
+                            md=4,
+                            className="mb-3",
+                        ),
+                    ],
+                    className="mb-4",
+                ),
+                # Gráficos (Evolução + Top Despesas)
+                dbc.Row(
+                    [
+                        dbc.Col(
+                            dbc.Card(
+                                [
+                                    dbc.CardBody(
+                                        render_evolution_chart(matriz_data),
+                                        className="p-3",
+                                    )
+                                ],
+                                className="shadow-sm",
+                            ),
+                            md=8,
+                            className="mb-3",
+                        ),
+                        dbc.Col(
+                            dbc.Card(
+                                [
+                                    dbc.CardBody(
+                                        render_top_expenses_chart(despesas_mes_atual),
+                                        className="p-3",
+                                    )
+                                ],
+                                className="shadow-sm",
+                            ),
+                            md=4,
+                            className="mb-3",
+                        ),
+                    ],
+                    className="mb-4",
+                ),
+                # Fluxo de Caixa
+                dbc.Card(
+                    [
+                        dbc.CardHeader(html.H4("Fluxo de Caixa", className="mb-0")),
+                        dbc.CardBody(
+                            [
+                                render_cash_flow_table(fluxo_data),
+                            ]
+                        ),
+                    ],
+                    className="shadow-sm",
                 ),
             ],
-            className="shadow-sm",
+            fluid=True,
+        )
+
+    except Exception as e:
+        logger.error(f"✗ Erro ao renderizar dashboard: {e}", exc_info=True)
+        return dbc.Alert(
+            f"Erro ao carregar dashboard: {str(e)}",
+            color="danger",
+            className="mt-4",
         )
 
 
+# ===== CALLBACK: Renderizar conteúdo da página baseado em URL =====
+
+
 @app.callback(
-    Output("conteudo-abas", "children"),
-    Input("tabs-principal", "value"),
+    Output("page-content", "children"),
+    Input("url", "pathname"),
     Input("store-transacao-salva", "data"),
     Input("store-categorias-atualizadas", "data"),
-    State("select-past", "value"),
-    State("select-future", "value"),
+    Input("select-past", "value"),
+    Input("select-future", "value"),
     prevent_initial_call=False,
     allow_duplicate=True,
 )
-def render_tab_content(
-    tab_value: str,
+def render_page_content(
+    pathname: str,
     store_transacao: float,
     store_categorias: float,
     months_past: int,
     months_future: int,
-):
+) -> dbc.Container:
     """
-    Renderiza o conteúdo dinâmico das abas.
+    Renderiza o conteúdo dinâmico baseado na URL (pathname).
 
-    Exibe gráficos no Dashboard, tabelas de transações nas abas
-    de Receitas e Despesas. Atualiza quando uma transação é salva
-    (via store-transacao-salva) ou categorias são modificadas
-    (via store-categorias-atualizadas).
+    Implementa roteamento de cliente que alterna entre 7 páginas:
+    - `/` (Dashboard): Resumo financeiro + Fluxo de Caixa
+    - `/receitas`: Tabela de receitas
+    - `/despesas`: Tabela de despesas
+    - `/analise`: Matriz de categorias vs meses
+    - `/orcamento`: Matriz de orçamento (realizado vs meta)
+    - `/tags`: Matriz de tags/entidades
+    - `/categorias`: Gerenciador de categorias
+
+    Atualiza quando:
+    - URL muda (pathname)
+    - Transações são salvas (via store-transacao-salva)
+    - Categorias são modificadas (via store-categorias-atualizadas)
+    - Filtros de data mudança (select-past ou select-future)
 
     Args:
-        tab_value: Valor da aba selecionada.
+        pathname: Caminho da URL (ex: "/", "/receitas", "/despesas").
         store_transacao: Timestamp da última transação salva (sinal).
         store_categorias: Timestamp da última atualização de categorias (sinal).
         months_past: Número de meses passados para análise.
         months_future: Número de meses futuros para análise.
 
     Returns:
-        Componente do Dash com o conteúdo da aba selecionada.
+        Componente do Dash com o conteúdo da página selecionada.
     """
+    # Normalizar pathname (remover trailing slash)
+    if pathname and pathname != "/":
+        pathname = pathname.rstrip("/")
+
     try:
         logger.info(
-            f"📌 Renderizando aba: {tab_value} (transacao_signal={store_transacao}, cat_signal={store_categorias})"
+            f"📌 Renderizando página: {pathname} (transacao_signal={store_transacao}, cat_signal={store_categorias})"
         )
 
-        if tab_value == "tab-dashboard":
-            logger.info("✓ Dashboard selecionado")
-            return dbc.Row(
-                dbc.Col(
-                    dbc.Card(
-                        dbc.CardBody(
-                            html.H3(
-                                "📈 Gráficos em breve",
-                                className="text-center text-muted",
-                            )
-                        )
-                    ),
-                    width=12,
-                )
-            )
+        if pathname == "/" or pathname == "":
+            return render_dashboard_page(months_past, months_future)
 
-        elif tab_value == "tab-receitas":
-            logger.info("💰 Carregando receitas...")
+        elif pathname == "/receitas":
+            logger.info("[RECEITAS] Carregando receitas...")
             try:
                 transacoes = get_transactions()
                 receitas = [t for t in transacoes if t.get("tipo") == "receita"]
                 logger.info(f"✓ {len(receitas)} receitas carregadas")
-                return render_transactions_table(receitas)
+
+                return dbc.Container(
+                    [
+                        html.H2("Receitas", className="mb-4 fw-bold text-success"),
+                        dbc.Card(
+                            [
+                                dbc.CardHeader(
+                                    html.H5(f"Total: {len(receitas)} transações")
+                                ),
+                                dbc.CardBody(render_transactions_table(receitas)),
+                            ],
+                            className="shadow-sm",
+                        ),
+                    ],
+                    fluid=True,
+                )
             except Exception as e:
                 logger.error(f"✗ Erro ao carregar receitas: {e}", exc_info=True)
                 return dbc.Alert(
                     f"Erro ao carregar receitas: {str(e)}",
                     color="danger",
+                    className="mt-4",
                 )
 
-        elif tab_value == "tab-despesas":
-            logger.info("💸 Carregando despesas...")
+        elif pathname == "/despesas":
+            logger.info("[DESPESAS] Carregando despesas...")
             try:
                 transacoes = get_transactions()
                 despesas = [t for t in transacoes if t.get("tipo") == "despesa"]
                 logger.info(f"✓ {len(despesas)} despesas carregadas")
-                return render_transactions_table(despesas)
+
+                return dbc.Container(
+                    [
+                        html.H2("Despesas", className="mb-4 fw-bold text-danger"),
+                        dbc.Card(
+                            [
+                                dbc.CardHeader(
+                                    html.H5(f"Total: {len(despesas)} transações")
+                                ),
+                                dbc.CardBody(render_transactions_table(despesas)),
+                            ],
+                            className="shadow-sm",
+                        ),
+                    ],
+                    fluid=True,
+                )
             except Exception as e:
                 logger.error(f"✗ Erro ao carregar despesas: {e}", exc_info=True)
                 return dbc.Alert(
                     f"Erro ao carregar despesas: {str(e)}",
                     color="danger",
+                    className="mt-4",
                 )
 
-        elif tab_value == "tab-analise":
-            logger.info("📈 Carregando matriz analítica...")
+        elif pathname == "/analise":
+            logger.info("[ANALISE] Carregando matriz analítica...")
             try:
                 matriz_data = get_category_matrix_data(
                     months_past=months_past, months_future=months_future
                 )
                 logger.info("✓ Matriz analítica carregada com sucesso")
-                
-                # Gerar componente de orçamento
-                budget_card = render_budget_progress(matriz_data)
-                
-                return dbc.Row(
+                return dbc.Container(
                     [
-                        # Coluna 1: Matriz Analítica (largura 8)
-                        dbc.Col(
-                            dbc.Card(
-                                [
-                                    dbc.CardHeader(
-                                        html.H3("📈 Matriz Analítica - Categorias vs Meses")
-                                    ),
-                                    dbc.CardBody(render_category_matrix(matriz_data)),
-                                ],
-                                className="shadow-sm",
-                            ),
-                            width=8,
-                        ),
-                        # Coluna 2: Painel de Orçamento (largura 4)
-                        dbc.Col(
-                            budget_card,
-                            width=4,
+                        html.H2("Análise Financeira", className="mb-4 fw-bold"),
+                        dbc.Card(
+                            [
+                                dbc.CardHeader(
+                                    html.H5("Categorias vs Meses - Valores por Período")
+                                ),
+                                dbc.CardBody(render_category_matrix(matriz_data)),
+                            ],
+                            className="shadow-sm",
                         ),
                     ],
-                    className="g-3",
+                    fluid=True,
                 )
             except Exception as e:
                 logger.error(f"✗ Erro ao carregar matriz analítica: {e}", exc_info=True)
                 return dbc.Alert(
                     f"Erro ao carregar matriz analítica: {str(e)}",
                     color="danger",
+                    className="mt-4",
                 )
 
-        elif tab_value == "tab-tags":
-            logger.info("🏷️ Carregando matriz de tags...")
+        elif pathname == "/orcamento":
+            logger.info("[ORCAMENTO] Carregando matriz de orçamento...")
+            try:
+                matriz_data = get_category_matrix_data(
+                    months_past=months_past, months_future=months_future
+                )
+                logger.info("✓ Matriz de orçamento carregada com sucesso")
+                return dbc.Container(
+                    [
+                        html.H2("Orçamento", className="mb-4 fw-bold text-primary"),
+                        dbc.Card(
+                            [
+                                dbc.CardHeader(
+                                    html.H5("Realizado vs Meta - Evolução do Orçamento")
+                                ),
+                                dbc.CardBody(render_budget_matrix(matriz_data)),
+                            ],
+                            className="shadow-sm",
+                        ),
+                    ],
+                    fluid=True,
+                )
+            except Exception as e:
+                logger.error(
+                    f"✗ Erro ao carregar matriz de orçamento: {e}", exc_info=True
+                )
+                return dbc.Alert(
+                    f"Erro ao carregar matriz de orçamento: {str(e)}",
+                    color="danger",
+                    className="mt-4",
+                )
+
+        elif pathname == "/tags":
+            logger.info("[TAGS] Carregando matriz de tags...")
             try:
                 matriz_tags_data = get_tag_matrix_data(
                     months_past=months_past, months_future=months_future
                 )
                 logger.info("✓ Matriz de tags carregada com sucesso")
-                return dbc.Card(
+                return dbc.Container(
                     [
-                        dbc.CardHeader(
-                            html.H3("🏷️ Matriz de Tags - Saldo por Entidade")
+                        html.H2("Tags", className="mb-4 fw-bold"),
+                        dbc.Card(
+                            [
+                                dbc.CardHeader(
+                                    html.H5("Saldo por Entidade - Análise Dinâmica")
+                                ),
+                                dbc.CardBody(render_tag_matrix(matriz_tags_data)),
+                            ],
+                            className="shadow-sm",
                         ),
-                        dbc.CardBody(render_tag_matrix(matriz_tags_data)),
                     ],
-                    className="shadow-sm",
+                    fluid=True,
                 )
             except Exception as e:
                 logger.error(f"✗ Erro ao carregar matriz de tags: {e}", exc_info=True)
                 return dbc.Alert(
                     f"Erro ao carregar matriz de tags: {str(e)}",
                     color="danger",
+                    className="mt-4",
                 )
 
-        elif tab_value == "tab-categorias":
-            logger.info("📁 Carregando categorias...")
+        elif pathname == "/categorias":
+            logger.info("[CATEGORIAS] Carregando categorias...")
             try:
                 # Carregar categorias separadas por tipo
                 receitas = get_categories(tipo="receita")
@@ -424,7 +684,13 @@ def render_tab_content(
                 )
 
                 # Usar componente render_category_manager
-                return render_category_manager(receitas, despesas)
+                return dbc.Container(
+                    [
+                        html.H2("Categorias", className="mb-4 fw-bold"),
+                        render_category_manager(receitas, despesas),
+                    ],
+                    fluid=True,
+                )
 
             except Exception as e:
                 logger.error(f"✗ Erro ao carregar categorias: {e}", exc_info=True)
@@ -434,8 +700,45 @@ def render_tab_content(
                 )
 
         else:
-            logger.warning(f"⚠️ Aba desconhecida: {tab_value}")
-            return html.Div()
+            logger.warning(f"[404] Página desconhecida: {pathname}")
+            return dbc.Container(
+                [
+                    dbc.Row(
+                        dbc.Col(
+                            [
+                                html.Div(
+                                    [
+                                        html.H2(
+                                            "404 - Página Não Encontrada",
+                                            className="text-danger mb-4",
+                                        ),
+                                        html.P(
+                                            f"O caminho '{pathname}' não foi encontrado.",
+                                            className="text-muted mb-3",
+                                        ),
+                                        html.P(
+                                            "Navegue usando o menu lateral para acessar as páginas disponíveis.",
+                                            className="text-muted",
+                                        ),
+                                        html.Hr(),
+                                        dbc.Button(
+                                            "Voltar para Dashboard",
+                                            href="/",
+                                            color="primary",
+                                            className="mt-3",
+                                        ),
+                                    ],
+                                    className="text-center",
+                                ),
+                            ],
+                            md=8,
+                            className="mx-auto",
+                        ),
+                        className="mt-5",
+                    )
+                ],
+                fluid=True,
+            )
 
     except Exception as e:
         logger.error(f"✗ Erro ao renderizar conteúdo das abas: {e}", exc_info=True)
@@ -1340,7 +1643,7 @@ def update_tag_dropdowns(
     Output("input-receita-descricao", "value"),
     Output("input-receita-valor", "value"),
     Output("dropdown-receita-tag", "value"),
-    Output("select-receita-categoria", "value"),
+    Output("dcc-receita-categoria", "value"),
     Input("btn-salvar-receita", "n_clicks"),
     State("input-receita-valor", "value"),
     State("input-receita-descricao", "value"),
@@ -1466,7 +1769,7 @@ def save_receita(
     Output("input-despesa-descricao", "value"),
     Output("input-despesa-valor", "value"),
     Output("dropdown-despesa-tag", "value"),
-    Output("select-despesa-categoria", "value"),
+    Output("dcc-despesa-categoria", "value"),
     Input("btn-salvar-despesa", "n_clicks"),
     State("input-despesa-valor", "value"),
     State("input-despesa-descricao", "value"),
@@ -1970,14 +2273,14 @@ def save_edit_category(
 if __name__ == "__main__":
     # ===== INICIALIZAÇÃO AUTOMÁTICA DO BANCO DE DADOS =====
     print("\n" + "=" * 70)
-    print("🚀 INICIANDO FINANCETSK")
+    print("[INICIANDO FINANCETSK]")
     print("=" * 70)
 
-    logger.info("🔧 Inicializando banco de dados...")
+    logger.info("[SETUP] Inicializando banco de dados...")
     try:
-        logger.info("📁 Verificando estrutura de diretórios...")
+        logger.info("[SETUP] Verificando estrutura de diretórios...")
         init_database()
-        logger.info("✅ Banco de dados pronto!")
+        logger.info("[SETUP] Banco de dados pronto!")
         print("✅ Banco de dados inicializado com sucesso")
 
     except Exception as e:
@@ -1992,13 +2295,13 @@ if __name__ == "__main__":
 
     # ===== INICIAR SERVIDOR =====
     print("=" * 70)
-    logger.info("🚀 Iniciando servidor FinanceTSK em http://localhost:8050")
-    print("🚀 Servidor rodando em: http://localhost:8050")
+    logger.info("[SETUP] Iniciando servidor FinanceTSK em http://localhost:8050")
+    print("[SERVER] Servidor rodando em: http://localhost:8050")
     print("=" * 70 + "\n")
 
     try:
         app.run_server(debug=True, host="localhost", port=8050)
     except Exception as e:
-        logger.error(f"❌ Erro ao iniciar servidor: {e}", exc_info=True)
-        print(f"\n❌ Erro ao iniciar servidor: {e}\n")
+        logger.error(f"[ERROR] Erro ao iniciar servidor: {e}", exc_info=True)
+        print(f"\n[ERROR] Erro ao iniciar servidor: {e}\n")
         raise

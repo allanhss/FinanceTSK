@@ -23,7 +23,11 @@ class TestBudgetProgress:
                     "nome": "Salario",
                     "icon": "💰",
                     "meta": 5000.0,
-                    "valores": {"2026-01": 5000.0, "2026-02": 5000.0, "2026-03": 5000.0}
+                    "valores": {
+                        "2026-01": 5000.0,
+                        "2026-02": 5000.0,
+                        "2026-03": 5000.0,
+                    },
                 }
             ],
             "despesas": [
@@ -32,30 +36,34 @@ class TestBudgetProgress:
                     "nome": "Alimentacao",
                     "icon": "🍔",
                     "meta": 1000.0,
-                    "valores": {"2026-01": 800.0, "2026-02": 950.0, "2026-03": 1100.0}
+                    "valores": {"2026-01": 800.0, "2026-02": 950.0, "2026-03": 1100.0},
                 },
                 {
                     "id": 4,
                     "nome": "Moradia",
                     "icon": "🏠",
                     "meta": 2000.0,
-                    "valores": {"2026-01": 2000.0, "2026-02": 2000.0, "2026-03": 2000.0}
+                    "valores": {
+                        "2026-01": 2000.0,
+                        "2026-02": 2000.0,
+                        "2026-03": 2000.0,
+                    },
                 },
                 {
                     "id": 5,
                     "nome": "Transporte",
                     "icon": "🚗",
                     "meta": 500.0,
-                    "valores": {"2026-01": 300.0, "2026-02": 400.0, "2026-03": 600.0}
+                    "valores": {"2026-01": 300.0, "2026-02": 400.0, "2026-03": 600.0},
                 },
                 {
                     "id": 6,
                     "nome": "Saude",
                     "icon": "🏥",
                     "meta": 0.0,  # Sem meta
-                    "valores": {"2026-01": 100.0, "2026-02": 150.0, "2026-03": 200.0}
+                    "valores": {"2026-01": 100.0, "2026-02": 150.0, "2026-03": 200.0},
                 },
-            ]
+            ],
         }
 
     def test_render_card_structure(self, dados_completos):
@@ -63,7 +71,7 @@ class TestBudgetProgress:
         card = render_budget_progress(dados_completos)
 
         # Validar tipo
-        assert hasattr(card, 'children'), "Card deve ter atributo 'children'"
+        assert hasattr(card, "children"), "Card deve ter atributo 'children'"
         assert len(card.children) == 2, "Card deve ter CardHeader e CardBody"
 
     def test_filters_despesas_with_meta(self, dados_completos):
@@ -95,18 +103,18 @@ class TestBudgetProgress:
         dados_vazios = {"meses": [], "receitas": [], "despesas": []}
         card = render_budget_progress(dados_vazios)
 
-        assert hasattr(card, 'children'), "Deve retornar Card mesmo com dados vazios"
+        assert hasattr(card, "children"), "Deve retornar Card mesmo com dados vazios"
         assert len(card.children) >= 1, "Card deve ter pelo menos corpo"
 
     def test_month_index_bounds(self, dados_completos):
         """Testa que o mês atual é detectado automaticamente."""
         # Com data do sistema, deve detectar mês atual se disponível
         card1 = render_budget_progress(dados_completos)
-        assert hasattr(card1, 'children'), "Deve renderizar com detecção automática"
+        assert hasattr(card1, "children"), "Deve renderizar com detecção automática"
 
         # Segundas chamada deve ter mesmo comportamento
         card2 = render_budget_progress(dados_completos)
-        assert hasattr(card2, 'children'), "Deve tratar índice inválido"
+        assert hasattr(card2, "children"), "Deve tratar índice inválido"
 
     def test_color_coding(self, dados_completos):
         """
