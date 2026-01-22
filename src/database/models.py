@@ -75,6 +75,7 @@ class Categoria(Base):
     tipo: str = Column(String(10), nullable=False, index=True)
     cor: str = Column(String(7), nullable=False, default="#6B7280")
     icone: Optional[str] = Column(String(50), nullable=True)
+    teto_mensal: float = Column(Float, nullable=False, default=0.0)
     created_at: datetime = Column(DateTime, nullable=False, default=datetime.now)
 
     # Relacionamentos
@@ -98,6 +99,7 @@ class Categoria(Base):
         tipo: str,
         cor: str = "#6B7280",
         icone: Optional[str] = None,
+        teto_mensal: float = 0.0,
     ) -> None:
         """
         Inicializa uma nova categoria com validação de cor hex e tipo.
@@ -107,6 +109,7 @@ class Categoria(Base):
             tipo: Tipo de categoria ('receita' ou 'despesa')
             cor: Cor em formato hex #RRGGBB (padrão: #6B7280)
             icone: Emoji ou nome do ícone (opcional)
+            teto_mensal: Teto/orçamento mensal para a categoria (default 0.0)
 
         Raises:
             ValueError: Se o formato da cor não for hex válido ou tipo
@@ -117,7 +120,8 @@ class Categoria(Base):
             ...     nome="Alimentação",
             ...     tipo="despesa",
             ...     cor="#22C55E",
-            ...     icone="🍔"
+            ...     icone="🍔",
+            ...     teto_mensal=1000.0
             ... )
         """
         if not nome or not nome.strip():
@@ -134,6 +138,9 @@ class Categoria(Base):
         self.tipo = tipo
         self.cor = cor
         self.icone = icone
+        # Tratar None como 0.0, garantir não-negatividade
+        meta_valor = teto_mensal if teto_mensal is not None else 0.0
+        self.teto_mensal = max(0.0, float(meta_valor))
 
     @staticmethod
     def _validar_cor_hex(cor: str) -> bool:
@@ -177,6 +184,7 @@ class Categoria(Base):
                 'tipo': 'despesa',
                 'cor': '#22C55E',
                 'icone': '🍔',
+                'teto_mensal': 1000.0,
                 'created_at': '2026-01-18T10:30:00',
                 'total_transacoes': 15
             }
@@ -187,6 +195,7 @@ class Categoria(Base):
             "tipo": self.tipo,
             "cor": self.cor,
             "icone": self.icone,
+            "teto_mensal": self.teto_mensal,
             "created_at": (self.created_at.isoformat() if self.created_at else None),
             "total_transacoes": len(self.transacoes) if self.transacoes else 0,
         }

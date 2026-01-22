@@ -14,7 +14,11 @@ logger = logging.getLogger(__name__)
 
 
 def create_category(
-    nome: str, tipo: str, cor: str = "#6B7280", icone: Optional[str] = None
+    nome: str,
+    tipo: str,
+    cor: str = "#6B7280",
+    icone: Optional[str] = None,
+    teto_mensal: float = 0.0,
 ) -> Tuple[bool, str]:
     """
     Creates a new category for transactions.
@@ -24,6 +28,7 @@ def create_category(
         tipo: Category type ('receita' or 'despesa').
         cor: Color in hex format #RRGGBB (default: #6B7280).
         icone: Optional emoji or icon name.
+        teto_mensal: Monthly budget/ceiling for the category (default 0.0).
 
     Returns:
         Tuple with (success: bool, message: str).
@@ -37,7 +42,8 @@ def create_category(
         ...     nome='Salário',
         ...     tipo='receita',
         ...     cor='#22C55E',
-        ...     icone='💰'
+        ...     icone='💰',
+        ...     teto_mensal=5000.0
         ... )
         (True, 'Categoria criada com sucesso.')
     """
@@ -48,6 +54,17 @@ def create_category(
         if tipo not in Categoria.TIPOS_VALIDOS:
             logger.error(f"❌ Tipo inválido: {tipo}")
             return False, "Tipo deve ser 'receita' ou 'despesa'."
+
+        # Validar e normalizar teto_mensal
+        meta_valor = 0.0
+        if teto_mensal is not None:
+            try:
+                meta_valor = float(teto_mensal)
+                if meta_valor < 0:
+                    meta_valor = 0.0
+            except (ValueError, TypeError):
+                logger.warning(f"⚠️ Meta inválida: {teto_mensal}, usando 0.0")
+                meta_valor = 0.0
 
         with get_db() as session:
             try:
@@ -75,7 +92,13 @@ def create_category(
 
                 # Criar nova categoria
                 logger.debug(f"📝 Criando objeto Categoria: {nome}")
-                nova_categoria = Categoria(nome=nome, tipo=tipo, cor=cor, icone=icone)
+                nova_categoria = Categoria(
+                    nome=nome,
+                    tipo=tipo,
+                    cor=cor,
+                    icone=icone,
+                    teto_mensal=meta_valor,
+                )
                 session.add(nova_categoria)
                 logger.debug(f"➕ Categoria adicionada à sessão")
 
@@ -223,6 +246,127 @@ def delete_category(category_id: int) -> Tuple[bool, str]:
         return False, "Erro ao remover categoria. Tente novamente."
 
 
+def update_category(
+    category_id: int,
+    novo_nome: Optional[str] = None,
+    novo_icone: Optional[str] = None,
+    novo_teto: Optional[float] = None,
+) -> Tuple[bool, str]:
+    """
+    Updates a category with new name, icon, and/or budget ceiling.
+
+    Only updates fields that are provided (not None). Validates all inputs
+    before making changes.
+
+    Args:
+        category_id: ID of the category to update.
+        novo_nome: New category name (optional).
+        novo_icone: New icon/emoji (optional).
+        novo_teto: New monthly budget ceiling in R$ (optional).
+
+    Returns:
+        Tuple with (success: bool, message: str).
+
+    Raises:
+        ValueError: If validation fails (invalid color, etc).
+
+    Example:
+        >>> update_category(5, novo_nome="Saúde", novo_teto=500.0)
+        (True, 'Categoria atualizada com sucesso.')
+    """
+    try:
+        logger.debug(f"🔄 Tentando atualizar categoria ID: {category_id}")
+
+        with get_db() as session:
+            try:
+                # Buscar categoria existente
+                categoria = (
+                    session.query(Categoria).filter(Categoria.id == category_id).first()
+                )
+
+                if not categoria:
+                    logger.warning(f"❌ Categoria não encontrada: ID {category_id}")
+                    return False, "Categoria não encontrada."
+
+                # Log do estado anterior
+                nome_anterior = categoria.nome
+                icone_anterior = categoria.icone
+                teto_anterior = categoria.teto_mensal
+
+                # Atualizar nome se fornecido
+                if novo_nome is not None:
+                    novo_nome = novo_nome.strip()
+                    if not novo_nome:
+                        logger.warning("⚠️ Nome vazio fornecido")
+                        return False, "Nome da categoria não pode estar vazio."
+                    categoria.nome = novo_nome
+                    logger.debug(f"   Nome: '{nome_anterior}' → '{novo_nome}'")
+
+                # Atualizar ícone se fornecido
+                if novo_icone is not None:
+                    # Validar que ícone não está em uso por outra categoria do mesmo tipo
+                    icone_duplicado = (
+                        session.query(Categoria)
+                        .filter(
+                            Categoria.tipo == categoria.tipo,
+                            Categoria.icone == novo_icone,
+                            Categoria.id != category_id,  # Excluir a própria categoria
+                        )
+                        .first()
+                    )
+                    if icone_duplicado:
+                        logger.warning(
+                            f"⚠️ Ícone '{novo_icone}' já em uso por outra categoria"
+                        )
+                        return (
+                            False,
+                            f"Ícone '{novo_icone}' já está em uso em outra categoria.",
+                        )
+                    categoria.icone = novo_icone
+                    logger.debug(f"   Ícone: '{icone_anterior}' → '{novo_icone}'")
+
+                # Atualizar teto mensal se fornecido
+                if novo_teto is not None:
+                    # Validar e normalizar teto
+                    try:
+                        teto_valor = float(novo_teto)
+                        if teto_valor < 0:
+                            teto_valor = 0.0
+                    except (ValueError, TypeError):
+                        logger.warning(f"⚠️ Teto inválido: {novo_teto}")
+                        return False, "Teto mensal deve ser um número válido."
+                    categoria.teto_mensal = teto_valor
+                    logger.debug(
+                        f"   Teto: R$ {teto_anterior:.2f} → R$ {teto_valor:.2f}"
+                    )
+
+                # Commit das mudanças
+                session.commit()
+                logger.info(
+                    f"✅ Categoria atualizada: {categoria.nome} (ID: {category_id})"
+                )
+                return True, "Categoria atualizada com sucesso."
+
+            except IntegrityError as ie:
+                session.rollback()
+                logger.warning(f"⚠️ Erro de integridade (possível duplicata): {ie}")
+                return False, "Categoria com esse nome e tipo já existe."
+
+            except ValueError as ve:
+                session.rollback()
+                logger.error(f"❌ Erro de validação: {ve}")
+                return False, str(ve)
+
+            except Exception as e:
+                session.rollback()
+                logger.error(f"❌ Erro inesperado ao atualizar categoria: {e}")
+                raise
+
+    except Exception as e:
+        logger.error(f"❌ Erro ao atualizar categoria: {e}", exc_info=True)
+        return False, "Erro ao atualizar categoria. Tente novamente."
+
+
 def initialize_default_categories() -> Tuple[bool, str]:
     """
     Initializes default categories if database is empty.
@@ -239,22 +383,27 @@ def initialize_default_categories() -> Tuple[bool, str]:
     """
     # Padrão de Receitas
     CATEGORIAS_RECEITA = [
-        {"nome": "Salário", "cor": "#10B981", "icone": "💼"},
-        {"nome": "Mesada", "cor": "#06B6D4", "icone": "🎁"},
-        {"nome": "Vendas", "cor": "#F59E0B", "icone": "🛒"},
-        {"nome": "Investimentos", "cor": "#8B5CF6", "icone": "📈"},
-        {"nome": "Outros", "cor": "#6B7280", "icone": "❓"},
+        {"nome": "Salário", "cor": "#10B981", "icone": "💼", "teto_mensal": 5000.0},
+        {"nome": "Mesada", "cor": "#06B6D4", "icone": "🎁", "teto_mensal": 500.0},
+        {"nome": "Vendas", "cor": "#F59E0B", "icone": "🛒", "teto_mensal": 2000.0},
+        {
+            "nome": "Investimentos",
+            "cor": "#8B5CF6",
+            "icone": "📈",
+            "teto_mensal": 1000.0,
+        },
+        {"nome": "Outros", "cor": "#6B7280", "icone": "❓", "teto_mensal": 0.0},
     ]
 
     # Padrão de Despesas
     CATEGORIAS_DESPESA = [
-        {"nome": "Alimentação", "cor": "#22C55E", "icone": "🍔"},
-        {"nome": "Moradia", "cor": "#EF4444", "icone": "🏠"},
-        {"nome": "Transporte", "cor": "#0EA5E9", "icone": "🚗"},
-        {"nome": "Lazer", "cor": "#A855F7", "icone": "🎬"},
-        {"nome": "Saúde", "cor": "#FB923C", "icone": "⚕️"},
-        {"nome": "Educação", "cor": "#06B6D4", "icone": "📚"},
-        {"nome": "Outros", "cor": "#6B7280", "icone": "❓"},
+        {"nome": "Alimentação", "cor": "#22C55E", "icone": "🍔", "teto_mensal": 1000.0},
+        {"nome": "Moradia", "cor": "#EF4444", "icone": "🏠", "teto_mensal": 2000.0},
+        {"nome": "Transporte", "cor": "#0EA5E9", "icone": "🚗", "teto_mensal": 500.0},
+        {"nome": "Lazer", "cor": "#A855F7", "icone": "🎬", "teto_mensal": 500.0},
+        {"nome": "Saúde", "cor": "#FB923C", "icone": "⚕️", "teto_mensal": 300.0},
+        {"nome": "Educação", "cor": "#06B6D4", "icone": "📚", "teto_mensal": 800.0},
+        {"nome": "Outros", "cor": "#6B7280", "icone": "❓", "teto_mensal": 0.0},
     ]
 
     try:
@@ -273,6 +422,7 @@ def initialize_default_categories() -> Tuple[bool, str]:
                     tipo=Categoria.TIPO_RECEITA,
                     cor=cat_info["cor"],
                     icone=cat_info["icone"],
+                    teto_mensal=cat_info.get("teto_mensal", 0.0),
                 )
                 session.add(nova_categoria)
 
@@ -283,6 +433,7 @@ def initialize_default_categories() -> Tuple[bool, str]:
                     tipo=Categoria.TIPO_DESPESA,
                     cor=cat_info["cor"],
                     icone=cat_info["icone"],
+                    teto_mensal=cat_info.get("teto_mensal", 0.0),
                 )
                 session.add(nova_categoria)
 
@@ -877,6 +1028,7 @@ def get_category_matrix_data(
                         "id": 1,
                         "nome": "Salário",
                         "icon": "💰",
+                        "meta": 5000.0,
                         "valores": {"2026-01": 5000.0, "2026-02": 5000.0, ...}
                     },
                     ...
@@ -886,6 +1038,7 @@ def get_category_matrix_data(
                         "id": 5,
                         "nome": "Alimentação",
                         "icon": "🍔",
+                        "meta": 1000.0,
                         "valores": {"2026-01": 800.0, ...}
                     },
                     ...
@@ -921,6 +1074,7 @@ def get_category_matrix_data(
                     Categoria.nome,
                     Categoria.icone,
                     Categoria.tipo,
+                    Categoria.teto_mensal,
                     func.strftime("%Y-%m", Transacao.data).label("mes"),
                     func.sum(Transacao.valor).label("total"),
                 )
@@ -934,21 +1088,25 @@ def get_category_matrix_data(
                     Categoria.nome,
                     Categoria.icone,
                     Categoria.tipo,
+                    Categoria.teto_mensal,
                     "mes",
                 )
                 .all()
             )
 
-            # Estruturar dados: {categoria_id: {tipo, nome, icone, valores: {mes: total}}}
+            # Estruturar dados: {categoria_id: {tipo, nome, icone, meta, valores: {mes: total}}}
             categorias_dict = {}
 
-            for categoria_id, nome, icone, tipo, mes, total in query:
+            for categoria_id, nome, icone, tipo, teto_mensal, mes, total in query:
                 if categoria_id not in categorias_dict:
+                    # Tratar None como 0.0
+                    meta_valor = teto_mensal if teto_mensal is not None else 0.0
                     categorias_dict[categoria_id] = {
                         "id": categoria_id,
                         "nome": nome,
                         "icon": icone or "📊",  # Ícone padrão se não houver
                         "tipo": tipo,
+                        "meta": float(meta_valor),
                         "valores": {mes_col: 0.0 for mes_col in meses_intervalo},
                     }
 
@@ -967,6 +1125,7 @@ def get_category_matrix_data(
                     "id": cat_data["id"],
                     "nome": cat_data["nome"],
                     "icon": cat_data["icon"],
+                    "meta": cat_data["meta"],
                     "valores": cat_data["valores"],
                 }
 

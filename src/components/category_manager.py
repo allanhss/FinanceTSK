@@ -301,7 +301,7 @@ def render_icon_selector(id_suffix: str, placeholder_icon: str = "💰") -> html
     Renderiza um seletor de ícones em grid (3 colunas) dentro de um Popover.
 
     Args:
-        id_suffix: Sufixo para os IDs (ex: "receita" ou "despesa").
+        id_suffix: Sufixo para os IDs (ex: "receita", "despesa", "edit").
         placeholder_icon: Ícone inicial a exibir no botão.
 
     Returns:
@@ -419,6 +419,14 @@ def render_category_manager(
                                             placeholder="Nome da Categoria...",
                                             type="text",
                                         ),
+                                        dbc.Input(
+                                            id="input-cat-meta-receita",
+                                            placeholder="Meta R$",
+                                            type="number",
+                                            step=0.01,
+                                            min=0,
+                                            style={"maxWidth": "100px"},
+                                        ),
                                         dbc.Button(
                                             "Adicionar",
                                             id="btn-add-cat-receita",
@@ -448,26 +456,44 @@ def render_category_manager(
                                                                         "Sem nome",
                                                                     )
                                                                 ),
+                                                                html.Span(
+                                                                    f" (Meta: R$ {cat.get('teto_mensal', 0):.2f})",
+                                                                    className="text-muted small ms-2",
+                                                                ),
                                                             ],
                                                             className="d-flex align-items-center",
                                                         ),
                                                         dbc.Col(
-                                                            dbc.Button(
-                                                                "X",
-                                                                id={
-                                                                    "type": (
-                                                                        "btn-delete-"
-                                                                        "category"
-                                                                    ),
-                                                                    "index": cat.get(
-                                                                        "id"
-                                                                    ),
-                                                                },
-                                                                color="danger",
-                                                                size="sm",
-                                                                outline=True,
-                                                                className="float-end",
-                                                            ),
+                                                            [
+                                                                dbc.Button(
+                                                                    "✏️",
+                                                                    id={
+                                                                        "type": "btn-edit-cat",
+                                                                        "index": cat.get(
+                                                                            "id"
+                                                                        ),
+                                                                    },
+                                                                    color="info",
+                                                                    size="sm",
+                                                                    outline=True,
+                                                                    className="me-1",
+                                                                ),
+                                                                dbc.Button(
+                                                                    "X",
+                                                                    id={
+                                                                        "type": (
+                                                                            "btn-delete-"
+                                                                            "category"
+                                                                        ),
+                                                                        "index": cat.get(
+                                                                            "id"
+                                                                        ),
+                                                                    },
+                                                                    color="danger",
+                                                                    size="sm",
+                                                                    outline=True,
+                                                                ),
+                                                            ],
                                                             width="auto",
                                                         ),
                                                     ],
@@ -508,6 +534,14 @@ def render_category_manager(
                                             placeholder="Nome da Categoria...",
                                             type="text",
                                         ),
+                                        dbc.Input(
+                                            id="input-cat-meta-despesa",
+                                            placeholder="Meta R$",
+                                            type="number",
+                                            step=0.01,
+                                            min=0,
+                                            style={"maxWidth": "100px"},
+                                        ),
                                         dbc.Button(
                                             "Adicionar",
                                             id="btn-add-cat-despesa",
@@ -537,26 +571,44 @@ def render_category_manager(
                                                                         "Sem nome",
                                                                     )
                                                                 ),
+                                                                html.Span(
+                                                                    f" (Meta: R$ {cat.get('teto_mensal', 0):.2f})",
+                                                                    className="text-muted small ms-2",
+                                                                ),
                                                             ],
                                                             className="d-flex align-items-center",
                                                         ),
                                                         dbc.Col(
-                                                            dbc.Button(
-                                                                "X",
-                                                                id={
-                                                                    "type": (
-                                                                        "btn-delete-"
-                                                                        "category"
-                                                                    ),
-                                                                    "index": cat.get(
-                                                                        "id"
-                                                                    ),
-                                                                },
-                                                                color="danger",
-                                                                size="sm",
-                                                                outline=True,
-                                                                className="float-end",
-                                                            ),
+                                                            [
+                                                                dbc.Button(
+                                                                    "✏️",
+                                                                    id={
+                                                                        "type": "btn-edit-cat",
+                                                                        "index": cat.get(
+                                                                            "id"
+                                                                        ),
+                                                                    },
+                                                                    color="info",
+                                                                    size="sm",
+                                                                    outline=True,
+                                                                    className="me-1",
+                                                                ),
+                                                                dbc.Button(
+                                                                    "X",
+                                                                    id={
+                                                                        "type": (
+                                                                            "btn-delete-"
+                                                                            "category"
+                                                                        ),
+                                                                        "index": cat.get(
+                                                                            "id"
+                                                                        ),
+                                                                    },
+                                                                    color="danger",
+                                                                    size="sm",
+                                                                    outline=True,
+                                                                ),
+                                                            ],
                                                             width="auto",
                                                         ),
                                                     ],
@@ -585,6 +637,50 @@ def render_category_manager(
                     className="g-4",
                 )
             ),
+            # ===== MODAL DE EDIÇÃO DE CATEGORIA =====
+            dbc.Modal(
+                [
+                    dbc.ModalHeader(
+                        dbc.ModalTitle("Editar Categoria"),
+                        close_button=True,
+                    ),
+                    dbc.ModalBody(
+                        dbc.InputGroup(
+                            [
+                                render_icon_selector("edit", "💰"),
+                                dbc.Input(
+                                    id="input-edit-cat-nome",
+                                    placeholder="Nome da Categoria...",
+                                    type="text",
+                                ),
+                                dbc.Input(
+                                    id="input-edit-cat-meta",
+                                    placeholder="Meta R$",
+                                    type="number",
+                                    step=0.01,
+                                    min=0,
+                                ),
+                            ],
+                            className="d-flex gap-2",
+                        )
+                    ),
+                    dbc.ModalFooter(
+                        [
+                            dbc.Button(
+                                "Salvar",
+                                id="btn-save-edit-cat",
+                                color="success",
+                                className="ms-auto",
+                            ),
+                        ]
+                    ),
+                ],
+                id="modal-edit-category",
+                is_open=False,
+                centered=True,
+            ),
+            # Store para guardar ID da categoria sendo editada
+            dcc.Store(id="store-edit-cat-id"),
         ],
         className="shadow-sm",
     )

@@ -21,6 +21,7 @@ from src.database.operations import (
     get_categories,
     create_category,
     delete_category,
+    update_category,
     get_used_icons,
     get_all_tags,
 )
@@ -31,7 +32,7 @@ from src.components.cash_flow import render_cash_flow_table
 from src.components.category_manager import render_category_manager, EMOJI_OPTIONS
 from src.components.category_matrix import render_category_matrix
 from src.components.tag_matrix import render_tag_matrix
-from src.components.category_matrix import render_category_matrix
+from src.components.budget_progress import render_budget_progress
 
 logger = logging.getLogger(__name__)
 
@@ -354,14 +355,32 @@ def render_tab_content(
                     months_past=months_past, months_future=months_future
                 )
                 logger.info("✓ Matriz analítica carregada com sucesso")
-                return dbc.Card(
+                
+                # Gerar componente de orçamento
+                budget_card = render_budget_progress(matriz_data)
+                
+                return dbc.Row(
                     [
-                        dbc.CardHeader(
-                            html.H3("📈 Matriz Analítica - Categorias vs Meses")
+                        # Coluna 1: Matriz Analítica (largura 8)
+                        dbc.Col(
+                            dbc.Card(
+                                [
+                                    dbc.CardHeader(
+                                        html.H3("📈 Matriz Analítica - Categorias vs Meses")
+                                    ),
+                                    dbc.CardBody(render_category_matrix(matriz_data)),
+                                ],
+                                className="shadow-sm",
+                            ),
+                            width=8,
                         ),
-                        dbc.CardBody(render_category_matrix(matriz_data)),
+                        # Coluna 2: Painel de Orçamento (largura 4)
+                        dbc.Col(
+                            budget_card,
+                            width=4,
+                        ),
                     ],
-                    className="shadow-sm",
+                    className="g-3",
                 )
             except Exception as e:
                 logger.error(f"✗ Erro ao carregar matriz analítica: {e}", exc_info=True)
@@ -640,7 +659,9 @@ def open_category_detail_modal(
                 # Limpar descrição removendo sufixos de recorrência e parcelamento
                 descricao = transacao.get("descricao", "")
                 # Remove: "(Recorrência #1)", "(1/10)", "1/10" e espaços sobrando
-                desc_limpa = re.sub(r"\s*(\(Recorrência #\d+\)|\(\d+/\d+\)|\d+/\d+)", "", descricao).strip()
+                desc_limpa = re.sub(
+                    r"\s*(\(Recorrência #\d+\)|\(\d+/\d+\)|\d+/\d+)", "", descricao
+                ).strip()
 
                 # Extrair valor e tipo
                 valor = transacao.get("valor", 0.0)
@@ -946,6 +967,8 @@ def toggle_emoji_picker_despesa(
     Output("store-categorias-atualizadas", "data"),
     Output("input-cat-receita", "value"),
     Output("input-cat-despesa", "value"),
+    Output("input-cat-meta-receita", "value"),
+    Output("input-cat-meta-despesa", "value"),
     Output("radio-icon-receita", "value"),
     Output("radio-icon-despesa", "value"),
     Input("btn-add-cat-receita", "n_clicks"),
@@ -953,6 +976,8 @@ def toggle_emoji_picker_despesa(
     Input({"type": "btn-delete-category", "index": ALL}, "n_clicks"),
     State("input-cat-receita", "value"),
     State("input-cat-despesa", "value"),
+    State("input-cat-meta-receita", "value"),
+    State("input-cat-meta-despesa", "value"),
     State("radio-icon-receita", "value"),
     State("radio-icon-despesa", "value"),
     prevent_initial_call=True,
@@ -963,6 +988,8 @@ def manage_categories(
     n_clicks_delete: List,
     input_receita: str,
     input_despesa: str,
+    meta_receita: Optional[float],
+    meta_despesa: Optional[float],
     icon_receita: Optional[str],
     icon_despesa: Optional[str],
 ):
@@ -973,8 +1000,8 @@ def manage_categories(
     O callback render_tab_content escuta o Store e recarrega a aba.
 
     Identifica qual botão foi clicado usando ctx.triggered_id:
-    - Se foi btn-add-cat-receita: adiciona categoria de receita com ícone
-    - Se foi btn-add-cat-despesa: adiciona categoria de despesa com ícone
+    - Se foi btn-add-cat-receita: adiciona categoria de receita com ícone e meta
+    - Se foi btn-add-cat-despesa: adiciona categoria de despesa com ícone e meta
     - Se foi btn-delete-category: remove categoria pelo ID
 
     Args:
@@ -983,12 +1010,15 @@ def manage_categories(
         n_clicks_delete: Lista de cliques em botões de exclusão.
         input_receita: Valor do input de receita.
         input_despesa: Valor do input de despesa.
+        meta_receita: Meta/orçamento mensal para receita (R$).
+        meta_despesa: Meta/orçamento mensal para despesa (R$).
         icon_receita: Ícone selecionado para receita.
         icon_despesa: Ícone selecionado para despesa.
 
     Returns:
         (timestamp para Store, input_receita limpo, input_despesa limpo,
-         icon_receita limpo, icon_despesa limpo)
+         meta_receita limpa, meta_despesa limpa, icon_receita limpo,
+         icon_despesa limpo)
     """
     # Verificar se realmente há um trigger válido
     if not ctx.triggered or not ctx.triggered_id:
@@ -1027,12 +1057,26 @@ def manage_categories(
                 logger.warning("⚠️ Nenhum ícone selecionado para receita")
                 raise PreventUpdate
 
+            # Validar e converter meta
+            meta_valor = 0.0
+            if meta_receita is not None:
+                try:
+                    meta_valor = float(meta_receita)
+                    if meta_valor < 0:
+                        meta_valor = 0.0
+                except (ValueError, TypeError):
+                    logger.warning(f"⚠️ Meta inválida: {meta_receita}, usando 0.0")
+                    meta_valor = 0.0
+
             logger.info(
                 f"➕ Adicionando categoria de receita: {input_receita} "
-                f"(ícone: {icon_receita})"
+                f"(ícone: {icon_receita}, meta: R$ {meta_valor:.2f})"
             )
             success, msg = create_category(
-                input_receita, tipo="receita", icone=icon_receita
+                input_receita,
+                tipo="receita",
+                icone=icon_receita,
+                teto_mensal=meta_valor,
             )
 
             if not success:
@@ -1051,12 +1095,26 @@ def manage_categories(
                 logger.warning("⚠️ Nenhum ícone selecionado para despesa")
                 raise PreventUpdate
 
+            # Validar e converter meta
+            meta_valor = 0.0
+            if meta_despesa is not None:
+                try:
+                    meta_valor = float(meta_despesa)
+                    if meta_valor < 0:
+                        meta_valor = 0.0
+                except (ValueError, TypeError):
+                    logger.warning(f"⚠️ Meta inválida: {meta_despesa}, usando 0.0")
+                    meta_valor = 0.0
+
             logger.info(
                 f"➕ Adicionando categoria de despesa: {input_despesa} "
-                f"(ícone: {icon_despesa})"
+                f"(ícone: {icon_despesa}, meta: R$ {meta_valor:.2f})"
             )
             success, msg = create_category(
-                input_despesa, tipo="despesa", icone=icon_despesa
+                input_despesa,
+                tipo="despesa",
+                icone=icon_despesa,
+                teto_mensal=meta_valor,
             )
 
             if not success:
@@ -1080,8 +1138,10 @@ def manage_categories(
             time.time(),  # Sinaliza que houve mudança
             "",  # Limpar input-cat-receita
             "",  # Limpar input-cat-despesa
-            None,  # Limpar dropdown-icon-receita
-            None,  # Limpar dropdown-icon-despesa
+            None,  # Limpar input-cat-meta-receita
+            None,  # Limpar input-cat-meta-despesa
+            None,  # Limpar radio-icon-receita
+            None,  # Limpar radio-icon-despesa
         )
 
     except PreventUpdate:
@@ -1335,7 +1395,16 @@ def save_receita(
     if not all([valor, descricao, data, categoria_id]):
         msg_erro = "❌ Preencha todos os campos obrigatórios!"
         logger.warning(f"⚠️ {msg_erro}")
-        return True, msg_erro, True, 0, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+        return (
+            True,
+            msg_erro,
+            True,
+            0,
+            dash.no_update,
+            dash.no_update,
+            dash.no_update,
+            dash.no_update,
+        )
 
     try:
         from datetime import datetime
@@ -1363,12 +1432,30 @@ def save_receita(
         else:
             msg_erro = f"❌ Erro: {message}"
             logger.error(f"✗ {msg_erro}")
-            return True, msg_erro, True, 0, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+            return (
+                True,
+                msg_erro,
+                True,
+                0,
+                dash.no_update,
+                dash.no_update,
+                dash.no_update,
+                dash.no_update,
+            )
 
     except Exception as e:
         msg_erro = f"❌ Erro ao salvar: {str(e)}"
         logger.error(f"✗ {msg_erro}", exc_info=True)
-        return True, msg_erro, True, 0, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+        return (
+            True,
+            msg_erro,
+            True,
+            0,
+            dash.no_update,
+            dash.no_update,
+            dash.no_update,
+            dash.no_update,
+        )
 
 
 @app.callback(
@@ -1437,7 +1524,16 @@ def save_despesa(
     if not all([valor, descricao, data, categoria_id]):
         msg_erro = "❌ Preencha todos os campos obrigatórios!"
         logger.warning(f"⚠️ {msg_erro}")
-        return True, msg_erro, True, 0, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+        return (
+            True,
+            msg_erro,
+            True,
+            0,
+            dash.no_update,
+            dash.no_update,
+            dash.no_update,
+            dash.no_update,
+        )
 
     try:
         from datetime import datetime
@@ -1469,12 +1565,30 @@ def save_despesa(
         else:
             msg_erro = f"❌ Erro: {message}"
             logger.error(f"✗ {msg_erro}")
-            return True, msg_erro, True, 0, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+            return (
+                True,
+                msg_erro,
+                True,
+                0,
+                dash.no_update,
+                dash.no_update,
+                dash.no_update,
+                dash.no_update,
+            )
 
     except Exception as e:
         msg_erro = f"❌ Erro ao salvar: {str(e)}"
         logger.error(f"✗ {msg_erro}", exc_info=True)
-        return True, msg_erro, True, 0, dash.no_update, dash.no_update, dash.no_update, dash.no_update
+        return (
+            True,
+            msg_erro,
+            True,
+            0,
+            dash.no_update,
+            dash.no_update,
+            dash.no_update,
+            dash.no_update,
+        )
 
 
 @app.callback(
@@ -1616,6 +1730,241 @@ def toggle_receita_frequencia(is_recorrente: List) -> bool:
     else:
         logger.debug("🔒 Desabilitando frequência de recorrência (Receita)")
     return not habilitado
+
+
+# ===== CALLBACKS PARA EDIÇÃO DE CATEGORIAS =====
+
+
+@app.callback(
+    Output("modal-edit-category", "is_open"),
+    Output("input-edit-cat-nome", "value"),
+    Output("input-edit-cat-meta", "value"),
+    Output("btn-icon-edit", "children"),
+    Output("radio-icon-edit", "value"),
+    Output("store-edit-cat-id", "data"),
+    Input({"type": "btn-edit-cat", "index": ALL}, "n_clicks"),
+    prevent_initial_call=True,
+)
+def open_edit_modal(n_clicks_list: List[int]) -> tuple:
+    """
+    Abre o modal de edição com dados da categoria carregados.
+
+    Args:
+        n_clicks_list: Lista de cliques dos botões de editar.
+
+    Returns:
+        Tupla: (modal_is_open, nome, meta, icone_btn, icone_value, category_id)
+    """
+    if not ctx.triggered or not ctx.triggered_id:
+        logger.debug("⏭️  Nenhum trigger válido para edição")
+        raise PreventUpdate
+
+    triggered_id = ctx.triggered_id
+
+    # Validar se é um padrão-matched button
+    if not isinstance(triggered_id, dict) or triggered_id.get("type") != "btn-edit-cat":
+        logger.debug(f"⏭️  ID não é btn-edit-cat: {triggered_id}")
+        raise PreventUpdate
+
+    category_id = triggered_id.get("index")
+    if not category_id:
+        logger.warning("⚠️ Nenhum ID de categoria fornecido")
+        raise PreventUpdate
+
+    try:
+        # Buscar a categoria no banco
+        todas_categorias = get_categories()
+        categoria = next(
+            (c for c in todas_categorias if c.get("id") == category_id), None
+        )
+
+        if not categoria:
+            logger.warning(f"⚠️ Categoria com ID {category_id} não encontrada")
+            raise PreventUpdate
+
+        logger.info(
+            f"📝 Abrindo modal de edição: {categoria.get('nome')} (ID: {category_id})"
+        )
+
+        return (
+            True,  # Abrir modal
+            categoria.get("nome", ""),  # Nome
+            categoria.get("teto_mensal", 0.0),  # Meta
+            categoria.get("icone", "💰"),  # Ícone no botão
+            categoria.get("icone", "💰"),  # Ícone selecionado
+            category_id,  # ID armazenado no store
+        )
+
+    except Exception as e:
+        logger.error(f"✗ Erro ao abrir modal de edição: {e}", exc_info=True)
+        raise PreventUpdate
+
+
+@app.callback(
+    Output("popover-icon-edit", "is_open"),
+    Output("btn-icon-edit", "children", allow_duplicate=True),
+    Output("radio-icon-edit", "options"),
+    Input("btn-icon-edit", "n_clicks"),
+    Input("radio-icon-edit", "value"),
+    State("popover-icon-edit", "is_open"),
+    State("btn-icon-edit", "children"),
+    State("store-edit-cat-id", "data"),
+    prevent_initial_call=True,
+)
+def toggle_edit_icon_picker(
+    n_clicks_btn: Optional[int],
+    radio_value: Optional[str],
+    is_open: bool,
+    btn_icon_current: str,
+    category_id: Optional[int],
+) -> tuple:
+    """
+    Gerencia abertura/fechamento e filtro dinâmico do Popover de ícones (Edição).
+
+    Mantém o ícone atual da categoria na lista de opções (exceção à regra de unicidade).
+
+    Args:
+        n_clicks_btn: Cliques no botão seletor.
+        radio_value: Valor selecionado no RadioItems.
+        is_open: Estado atual do popover.
+        btn_icon_current: Ícone atual exibido no botão.
+        category_id: ID da categoria sendo editada (para exclusão).
+
+    Returns:
+        Tupla: (is_open, btn_children, radio_options)
+    """
+    if not ctx.triggered:
+        raise PreventUpdate
+
+    triggered_id = ctx.triggered_id
+    logger.debug(f"Emoji Picker Edição acionado: {triggered_id}")
+
+    # Cenário 1: Clique no botão
+    # Deixa o navegador gerenciar abertura/fechamento
+    # Python filtra as opções de ícones
+    if triggered_id == "btn-icon-edit":
+        # Recuperar ícones já usados em TODAS as categorias
+        todas_categorias = get_categories()
+        icones_usados = {c.get("icone") for c in todas_categorias if c.get("icone")}
+
+        # Remover ícone da categoria atual da lista de "não permitidos"
+        # (permitindo que mantenha seu próprio ícone)
+        if category_id:
+            categoria_atual = next(
+                (c for c in todas_categorias if c.get("id") == category_id), None
+            )
+            if categoria_atual and categoria_atual.get("icone"):
+                icones_usados.discard(categoria_atual.get("icone"))
+
+        # Ícones disponíveis: todos, menos os já usados
+        opcoes_disponiveis = [
+            {"label": e, "value": e} for e in EMOJI_OPTIONS if e not in icones_usados
+        ]
+        logger.info(
+            f"Popover Edição alternado. "
+            f"Ícones disponíveis: {len(opcoes_disponiveis)}/{len(EMOJI_OPTIONS)}"
+        )
+        return (no_update, no_update, opcoes_disponiveis)
+
+    # Cenário 2: Seleção no RadioItems
+    # Força o fechamento e atualiza o botão
+    elif triggered_id == "radio-icon-edit" and radio_value:
+        logger.info(f"Ícone selecionado (Edição): {radio_value}")
+        return (False, radio_value, no_update)
+
+    raise PreventUpdate
+
+
+@app.callback(
+    Output("modal-edit-category", "is_open", allow_duplicate=True),
+    Output("store-edit-cat-id", "data", allow_duplicate=True),
+    Output("store-transacao-salva", "data", allow_duplicate=True),
+    Input("btn-save-edit-cat", "n_clicks"),
+    State("input-edit-cat-nome", "value"),
+    State("radio-icon-edit", "value"),
+    State("input-edit-cat-meta", "value"),
+    State("store-edit-cat-id", "data"),
+    prevent_initial_call=True,
+)
+def save_edit_category(
+    n_clicks: Optional[int],
+    novo_nome: Optional[str],
+    novo_icone: Optional[str],
+    novo_teto: Optional[float],
+    category_id: Optional[int],
+) -> tuple:
+    """
+    Salva as alterações da categoria no banco de dados.
+
+    Args:
+        n_clicks: Cliques no botão salvar.
+        novo_nome: Novo nome da categoria.
+        novo_icone: Novo ícone da categoria.
+        novo_teto: Novo teto/meta mensal.
+        category_id: ID da categoria sendo editada.
+
+    Returns:
+        Tupla: (modal_is_open, store_id, store_timestamp)
+    """
+    if not ctx.triggered or not category_id:
+        logger.debug("⏭️  Trigger inválido para salvar edição")
+        raise PreventUpdate
+
+    if not n_clicks:
+        raise PreventUpdate
+
+    try:
+        # Validações básicas
+        if not novo_nome or not novo_nome.strip():
+            logger.warning("⚠️ Nome não pode ser vazio")
+            raise PreventUpdate
+
+        if not novo_icone:
+            logger.warning("⚠️ Ícone não pode ser vazio")
+            raise PreventUpdate
+
+        # Normalizar meta
+        meta_valor = 0.0
+        if novo_teto is not None:
+            try:
+                meta_valor = float(novo_teto)
+                if meta_valor < 0:
+                    meta_valor = 0.0
+            except (ValueError, TypeError):
+                logger.warning(f"⚠️ Meta inválida: {novo_teto}, usando 0.0")
+                meta_valor = 0.0
+
+        logger.info(
+            f"💾 Salvando edição de categoria ID {category_id}: "
+            f"nome={novo_nome}, ícone={novo_icone}, meta=R$ {meta_valor:.2f}"
+        )
+
+        # Chamar update_category
+        success, msg = update_category(
+            category_id,
+            novo_nome=novo_nome.strip(),
+            novo_icone=novo_icone,
+            novo_teto=meta_valor,
+        )
+
+        if not success:
+            logger.warning(f"⚠️ Erro ao atualizar categoria: {msg}")
+            raise PreventUpdate
+
+        logger.info(f"✅ Categoria atualizada com sucesso: {msg}")
+
+        # Retornar: fechar modal, limpar store, sinalizar atualização
+        return (
+            False,  # Fechar modal
+            None,  # Limpar ID do store
+            time.time(),  # Sinalizar mudança (atualiza categorias)
+        )
+
+    except PreventUpdate:
+        raise
+    except Exception as e:
+        logger.error(f"✗ Erro ao salvar edição: {e}", exc_info=True)
+        raise PreventUpdate
 
 
 if __name__ == "__main__":
