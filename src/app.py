@@ -637,9 +637,10 @@ def open_category_detail_modal(
                 if mes_key is None:
                     continue  # Pula se não conseguir extrair mês
 
-                # Limpar descrição removendo sufixos de recorrência
+                # Limpar descrição removendo sufixos de recorrência e parcelamento
                 descricao = transacao.get("descricao", "")
-                desc_limpa = re.sub(r"\s*\(Recorrência #\d+\)", "", descricao)
+                # Remove: "(Recorrência #1)", "(1/10)", "1/10" e espaços sobrando
+                desc_limpa = re.sub(r"\s*(\(Recorrência #\d+\)|\(\d+/\d+\)|\d+/\d+)", "", descricao).strip()
 
                 # Extrair valor e tipo
                 valor = transacao.get("valor", 0.0)
@@ -1276,6 +1277,10 @@ def update_tag_dropdowns(
     Output("alerta-modal", "children"),
     Output("modal-transacao", "is_open", allow_duplicate=True),
     Output("store-transacao-salva", "data"),
+    Output("input-receita-descricao", "value"),
+    Output("input-receita-valor", "value"),
+    Output("dropdown-receita-tag", "value"),
+    Output("select-receita-categoria", "value"),
     Input("btn-salvar-receita", "n_clicks"),
     State("input-receita-valor", "value"),
     State("input-receita-descricao", "value"),
@@ -1330,7 +1335,7 @@ def save_receita(
     if not all([valor, descricao, data, categoria_id]):
         msg_erro = "❌ Preencha todos os campos obrigatórios!"
         logger.warning(f"⚠️ {msg_erro}")
-        return True, msg_erro, True, 0
+        return True, msg_erro, True, 0, dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
     try:
         from datetime import datetime
@@ -1354,16 +1359,16 @@ def save_receita(
             logger.info(f"✓ Receita salva com sucesso: {descricao}")
             timestamp = time.time()
             logger.info(f"📡 Sinalizando atualização (timestamp={timestamp})")
-            return False, "", False, timestamp
+            return False, "", False, timestamp, "", None, [], None
         else:
             msg_erro = f"❌ Erro: {message}"
             logger.error(f"✗ {msg_erro}")
-            return True, msg_erro, True, 0
+            return True, msg_erro, True, 0, dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
     except Exception as e:
         msg_erro = f"❌ Erro ao salvar: {str(e)}"
         logger.error(f"✗ {msg_erro}", exc_info=True)
-        return True, msg_erro, True, 0
+        return True, msg_erro, True, 0, dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
 
 @app.callback(
@@ -1371,6 +1376,10 @@ def save_receita(
     Output("alerta-modal", "children", allow_duplicate=True),
     Output("modal-transacao", "is_open", allow_duplicate=True),
     Output("store-transacao-salva", "data", allow_duplicate=True),
+    Output("input-despesa-descricao", "value"),
+    Output("input-despesa-valor", "value"),
+    Output("dropdown-despesa-tag", "value"),
+    Output("select-despesa-categoria", "value"),
     Input("btn-salvar-despesa", "n_clicks"),
     State("input-despesa-valor", "value"),
     State("input-despesa-descricao", "value"),
@@ -1428,7 +1437,7 @@ def save_despesa(
     if not all([valor, descricao, data, categoria_id]):
         msg_erro = "❌ Preencha todos os campos obrigatórios!"
         logger.warning(f"⚠️ {msg_erro}")
-        return True, msg_erro, True, 0
+        return True, msg_erro, True, 0, dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
     try:
         from datetime import datetime
@@ -1456,16 +1465,16 @@ def save_despesa(
             logger.info(f"✓ Despesa salva com sucesso: {descricao}")
             timestamp = time.time()
             logger.info(f"📡 Sinalizando atualização (timestamp={timestamp})")
-            return False, "", False, timestamp
+            return False, "", False, timestamp, "", None, [], None
         else:
             msg_erro = f"❌ Erro: {message}"
             logger.error(f"✗ {msg_erro}")
-            return True, msg_erro, True, 0
+            return True, msg_erro, True, 0, dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
     except Exception as e:
         msg_erro = f"❌ Erro ao salvar: {str(e)}"
         logger.error(f"✗ {msg_erro}", exc_info=True)
-        return True, msg_erro, True, 0
+        return True, msg_erro, True, 0, dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
 
 @app.callback(

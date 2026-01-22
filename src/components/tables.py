@@ -49,6 +49,9 @@ def render_transactions_table(transacoes: List[Dict]) -> dbc.Table | dbc.Alert:
         # Converter para DataFrame
         df = pd.DataFrame(transacoes)
 
+        # Remover coluna "tags" (plural) se existir (redundante com "tag")
+        df = df.drop(columns=["tags"], errors="ignore")
+
         # Colunas desejadas na ordem de exibição
         colunas_desejadas = [
             "data",
@@ -57,7 +60,6 @@ def render_transactions_table(transacoes: List[Dict]) -> dbc.Table | dbc.Alert:
             "valor",
             "tipo",
             "tag",
-            "tags",
         ]
 
         # Manter apenas colunas que existem no DataFrame
@@ -99,7 +101,6 @@ def render_transactions_table(transacoes: List[Dict]) -> dbc.Table | dbc.Alert:
                 "valor": "Valor",
                 "tipo": "Tipo",
                 "tag": "Tag",
-                "tags": "Tags",
             }
         )
 
