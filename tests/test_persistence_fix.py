@@ -51,9 +51,7 @@ def test_database_persistence():
 
     # 2. Verificar diretório
     print("2️⃣  Verificando diretório data/...")
-    assert os.path.isdir(
-        DIRETORIO_DADOS
-    ), f"Diretório não existe: {DIRETORIO_DADOS}"
+    assert os.path.isdir(DIRETORIO_DADOS), f"Diretório não existe: {DIRETORIO_DADOS}"
     print(f"   ✅ Diretório existe: {DIRETORIO_DADOS}\n")
 
     # 3. Remover banco antigo para teste limpo
@@ -77,9 +75,7 @@ def test_database_persistence():
 
     # 5. Verificar que arquivo foi criado
     print("5️⃣  Verificando se arquivo finance.db foi criado...")
-    assert os.path.exists(
-        CAMINHO_BANCO
-    ), f"Arquivo não foi criado: {CAMINHO_BANCO}"
+    assert os.path.exists(CAMINHO_BANCO), f"Arquivo não foi criado: {CAMINHO_BANCO}"
     file_size = os.path.getsize(CAMINHO_BANCO)
     print(f"   ✅ Arquivo criado: {CAMINHO_BANCO}")
     print(f"   📦 Tamanho: {file_size} bytes\n")
@@ -98,13 +94,24 @@ def test_database_persistence():
     assert success, f"Falha ao criar categoria: {msg}"
     print(f"   ✓ Categoria criada: {msg}")
 
-    # Obter ID da categoria
+    # Obter ID da categoria e da conta
     from src.database.connection import get_db, engine
-    from src.database.models import Categoria
+    from src.database.models import Categoria, Conta
 
     with get_db() as session:
         cat = session.query(Categoria).filter_by(nome="Teste").first()
         cat_id = cat.id
+        conta = session.query(Conta).filter_by(nome="Conta Padrão").first()
+        if conta:
+            conta_id = conta.id
+        else:
+            # Se não existir, criar a conta padrão
+            from src.database.operations import create_account
+
+            success_conta, msg_conta = create_account("Conta Padrão", "conta", 0.0)
+            with get_db() as session2:
+                conta = session2.query(Conta).filter_by(nome="Conta Padrão").first()
+                conta_id = conta.id if conta else 1
 
     # Criar transação
     success, msg = create_transaction(
@@ -113,6 +120,7 @@ def test_database_persistence():
         valor=99.99,
         data=date(2026, 1, 19),
         categoria_id=cat_id,
+        conta_id=conta_id,
     )
     assert success, f"Falha ao criar transação: {msg}"
     print(f"   ✓ Transação criada: {msg}")
@@ -137,7 +145,7 @@ def test_database_persistence():
         conn.execute(text("VACUUM"))
         conn.commit()
     print("   ✓ VACUUM executado\n")
-    
+
     # 8. Verificar tamanho do arquivo após inserção
     print("8️⃣  Verificando tamanho do arquivo após inserção...")
     new_size = os.path.getsize(CAMINHO_BANCO)
@@ -151,9 +159,7 @@ def test_database_persistence():
     init_database()
     assert os.path.exists(CAMINHO_BANCO), "Arquivo foi removido na segunda init!"
     transacoes_segunda = get_transactions()
-    assert (
-        len(transacoes_segunda) == len(transacoes)
-    ), "Transações foram duplicadas!"
+    assert len(transacoes_segunda) == len(transacoes), "Transações foram duplicadas!"
     print("   ✅ Segunda inicialização não duplica dados\n")
 
     print("=" * 70)

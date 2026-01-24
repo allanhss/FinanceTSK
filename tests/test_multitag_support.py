@@ -9,7 +9,7 @@ Valida:
 
 import pytest
 from datetime import date
-from src.database.models import Transacao, Categoria
+from src.database.models import Transacao, Categoria, Conta
 from src.database.operations import (
     create_transaction,
     get_all_tags,
@@ -22,7 +22,7 @@ from src.database.connection import get_db
 @pytest.fixture(autouse=True)
 def setup_teardown():
     """Preparar e limpar banco para cada teste."""
-    # Setup: Criar categoria padrão
+    # Setup: Criar categoria padrão e obter conta padrão
     with get_db() as session:
         session.query(Transacao).delete()
         session.query(Categoria).delete()
@@ -40,14 +40,23 @@ def setup_teardown():
         session.commit()
 
 
+def _get_default_account_id():
+    """Get default account ID for tests."""
+    with get_db() as session:
+        conta = session.query(Conta).filter_by(nome="Conta Padrão").first()
+        return conta.id if conta else 1
+
+
 def test_create_transaction_single_tag_string():
     """Testar create_transaction com tag simples (string)."""
+    conta_id = _get_default_account_id()
     success, msg = create_transaction(
         tipo="receita",
         descricao="Teste Single Tag",
         valor=100.0,
         data=date(2026, 1, 20),
         categoria_id=1,
+        conta_id=conta_id,
         tag="Mãe",  # String simples
     )
 
@@ -61,12 +70,14 @@ def test_create_transaction_single_tag_string():
 
 def test_create_transaction_multiple_tags_list():
     """Testar create_transaction com múltiplas tags (lista)."""
+    conta_id = _get_default_account_id()
     success, msg = create_transaction(
         tipo="receita",
         descricao="Teste Multi Tag",
         valor=100.0,
         data=date(2026, 1, 20),
         categoria_id=1,
+        conta_id=conta_id,
         tag=["Mãe", "Saúde", "Trabalho"],  # Lista
     )
 
@@ -81,12 +92,14 @@ def test_create_transaction_multiple_tags_list():
 
 def test_create_transaction_tag_none():
     """Testar create_transaction com tag=None."""
+    conta_id = _get_default_account_id()
     success, msg = create_transaction(
         tipo="receita",
         descricao="Teste No Tag",
         valor=100.0,
         data=date(2026, 1, 20),
         categoria_id=1,
+        conta_id=conta_id,
         tag=None,
     )
 
@@ -101,6 +114,7 @@ def test_create_transaction_tag_none():
 def test_get_all_tags_single_tags():
     """Testar get_all_tags com tags simples."""
     # Criar 3 transações com tags diferentes
+    conta_id = _get_default_account_id()
     for tag_name in ["Mãe", "Trabalho", "Saúde"]:
         create_transaction(
             tipo="receita",
@@ -108,6 +122,7 @@ def test_get_all_tags_single_tags():
             valor=100.0,
             data=date(2026, 1, 20),
             categoria_id=1,
+            conta_id=conta_id,
             tag=tag_name,
         )
 
@@ -123,12 +138,14 @@ def test_get_all_tags_single_tags():
 def test_get_all_tags_csv_tags():
     """Testar get_all_tags desagrupando tags CSV."""
     # Criar transações com tags CSV
+    conta_id = _get_default_account_id()
     create_transaction(
         tipo="receita",
         descricao="Teste 1",
         valor=100.0,
         data=date(2026, 1, 20),
         categoria_id=1,
+        conta_id=conta_id,
         tag=["Mãe", "Saúde"],
     )
     create_transaction(
@@ -137,6 +154,7 @@ def test_get_all_tags_csv_tags():
         valor=100.0,
         data=date(2026, 1, 20),
         categoria_id=1,
+        conta_id=conta_id,
         tag=["Trabalho", "Saúde"],
     )
 
@@ -148,12 +166,14 @@ def test_get_all_tags_csv_tags():
 
 def test_get_all_tags_mixed():
     """Testar get_all_tags com mix de tags simples e CSV."""
+    conta_id = _get_default_account_id()
     create_transaction(
         tipo="receita",
         descricao="Teste 1",
         valor=100.0,
         data=date(2026, 1, 20),
         categoria_id=1,
+        conta_id=conta_id,
         tag="Mãe",  # Simples
     )
     create_transaction(
@@ -162,6 +182,7 @@ def test_get_all_tags_mixed():
         valor=100.0,
         data=date(2026, 1, 20),
         categoria_id=1,
+        conta_id=conta_id,
         tag=["Trabalho", "Saúde"],  # CSV
     )
 
@@ -174,12 +195,14 @@ def test_get_all_tags_mixed():
 def test_get_tag_matrix_data_single_tags():
     """Testar get_tag_matrix_data com tags simples."""
     # Criar transações
+    conta_id = _get_default_account_id()
     create_transaction(
         tipo="receita",
         descricao="Renda",
         valor=1000.0,
         data=date(2026, 1, 15),
         categoria_id=1,
+        conta_id=conta_id,
         tag="Trabalho",
     )
     create_transaction(
@@ -188,6 +211,7 @@ def test_get_tag_matrix_data_single_tags():
         valor=200.0,
         data=date(2026, 1, 20),
         categoria_id=1,
+        conta_id=conta_id,
         tag="Trabalho",
     )
 
@@ -202,12 +226,14 @@ def test_get_tag_matrix_data_single_tags():
 def test_get_tag_matrix_data_explode_multitags():
     """Testar get_tag_matrix_data explodindo transações multi-tag."""
     # Criar transação com 2 tags
+    conta_id = _get_default_account_id()
     create_transaction(
         tipo="receita",
         descricao="Renda",
         valor=1000.0,
         data=date(2026, 1, 15),
         categoria_id=1,
+        conta_id=conta_id,
         tag=["Mãe", "Trabalho"],  # 2 tags
     )
 
@@ -226,12 +252,14 @@ def test_get_tag_matrix_data_explode_multitags():
 def test_get_tag_matrix_data_partial_allocation():
     """Testar get_tag_matrix_data com múltiplas transações multi-tag."""
     # Transação 1: Receita 1000 para "Mãe" e "Trabalho"
+    conta_id = _get_default_account_id()
     create_transaction(
         tipo="receita",
         descricao="Renda",
         valor=1000.0,
         data=date(2026, 1, 15),
         categoria_id=1,
+        conta_id=conta_id,
         tag=["Mãe", "Trabalho"],
     )
     # Transação 2: Despesa 200 apenas para "Mãe"
@@ -241,6 +269,7 @@ def test_get_tag_matrix_data_partial_allocation():
         valor=200.0,
         data=date(2026, 1, 20),
         categoria_id=1,
+        conta_id=conta_id,
         tag="Mãe",
     )
 

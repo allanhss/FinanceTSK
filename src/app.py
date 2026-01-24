@@ -2,6 +2,7 @@ import logging
 import re
 import time
 import traceback
+import json
 from collections import defaultdict
 from datetime import date, datetime
 from dateutil.relativedelta import relativedelta
@@ -13,6 +14,7 @@ from dash import Dash, dcc, html, Input, Output, State, MATCH, ALL, ctx, no_upda
 from dash.exceptions import PreventUpdate
 
 from src.database.connection import init_database
+from src.utils.init_data import ensure_default_accounts, ensure_default_categories
 from src.database.operations import (
     get_transactions,
     create_transaction,
@@ -25,14 +27,23 @@ from src.database.operations import (
     update_category,
     get_used_icons,
     get_all_tags,
+    get_unique_tags_list,
+    get_classification_history,
+    get_accounts,
+    create_account,
+    delete_account,
+    get_account_balance,
 )
 from src.components.dashboard import render_summary_cards
+from src.components.dashboard_cards import render_dashboard_cards
 from src.components.modals import render_transaction_modal
 from src.components.tables import render_transactions_table
 from src.components.cash_flow import render_cash_flow_table
 from src.components.category_manager import render_category_manager, EMOJI_OPTIONS
 from src.components.category_matrix import render_category_matrix
 from src.components.tag_matrix import render_tag_matrix
+from src.components.account_manager import render_account_manager, render_accounts_grid
+from src.components.account_extract import render_account_extract
 from src.components.budget_progress import (
     render_budget_progress,
     render_budget_dashboard,
@@ -42,6 +53,14 @@ from src.components.dashboard_charts import (
     render_evolution_chart,
     render_top_expenses_chart,
 )
+from src.components.importer import (
+    render_importer_page,
+    render_preview_table,
+    render_import_success,
+    render_import_error,
+    render_tag_editor_modal,
+)
+from src.utils.importers import parse_upload_content
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +128,11 @@ app.layout = html.Div(
                                                     href="/despesas",
                                                     active="exact",
                                                 ),
+                                                dbc.NavLink(
+                                                    "📥 Importar",
+                                                    href="/importar",
+                                                    active="exact",
+                                                ),
                                             ],
                                             vertical=True,
                                             pills=True,
@@ -149,7 +173,12 @@ app.layout = html.Div(
                                         dbc.Nav(
                                             [
                                                 dbc.NavLink(
-                                                    "📁 Categorias",
+                                                    "� Contas",
+                                                    href="/contas",
+                                                    active="exact",
+                                                ),
+                                                dbc.NavLink(
+                                                    "�📁 Categorias",
                                                     href="/categorias",
                                                     active="exact",
                                                 ),
@@ -298,14 +327,8 @@ def render_dashboard_page(months_past: int, months_future: int) -> dbc.Container
             months_past=months_past, months_future=months_future
         )
 
-        # Buscar transações para resumo
+        # Buscar transações para gráfico de despesas do mês
         transacoes = get_transactions()
-        receitas = [t for t in transacoes if t.get("tipo") == "receita"]
-        despesas = [t for t in transacoes if t.get("tipo") == "despesa"]
-
-        total_receitas = sum(float(t.get("valor", 0)) for t in receitas)
-        total_despesas = sum(float(t.get("valor", 0)) for t in despesas)
-        saldo = total_receitas - total_despesas
 
         # Buscar despesas do mês atual para gráfico de rosca
         mes_atual = datetime.now()
@@ -313,8 +336,10 @@ def render_dashboard_page(months_past: int, months_future: int) -> dbc.Container
         if mes_atual.month == 12:
             ultimo_dia_mes = date(mes_atual.year + 1, 1, 1) - relativedelta(days=1)
         else:
-            ultimo_dia_mes = date(mes_atual.year, mes_atual.month + 1, 1) - relativedelta(days=1)
-        
+            ultimo_dia_mes = date(
+                mes_atual.year, mes_atual.month + 1, 1
+            ) - relativedelta(days=1)
+
         transacoes_mes_atual = get_transactions(
             start_date=primeiro_dia_mes, end_date=ultimo_dia_mes
         )
@@ -322,87 +347,16 @@ def render_dashboard_page(months_past: int, months_future: int) -> dbc.Container
             t for t in transacoes_mes_atual if t.get("tipo") == "despesa"
         ]
 
-        logger.info(
-            f"✓ Dashboard data: Receitas={total_receitas}, Despesas={total_despesas}, Saldo={saldo}"
-        )
+        logger.info("✓ Dashboard Multi-Contas renderizado com sucesso")
+
+        # Renderizar novos cards do Dashboard Multi-Contas
+        dashboard_cards = render_dashboard_cards()
 
         return dbc.Container(
             [
-                # Título
-                html.H2("Dashboard Financeiro", className="mb-4 fw-bold"),
-                # Cards de Resumo (KPI)
-                dbc.Row(
-                    [
-                        dbc.Col(
-                            dbc.Card(
-                                [
-                                    dbc.CardBody(
-                                        [
-                                            html.H6(
-                                                "Total Receitas",
-                                                className="text-muted",
-                                            ),
-                                            html.H3(
-                                                f"R$ {total_receitas:,.2f}",
-                                                className="text-success fw-bold",
-                                            ),
-                                        ]
-                                    )
-                                ],
-                                className="shadow-sm",
-                            ),
-                            md=4,
-                            className="mb-3",
-                        ),
-                        dbc.Col(
-                            dbc.Card(
-                                [
-                                    dbc.CardBody(
-                                        [
-                                            html.H6(
-                                                "Total Despesas",
-                                                className="text-muted",
-                                            ),
-                                            html.H3(
-                                                f"R$ {total_despesas:,.2f}",
-                                                className="text-danger fw-bold",
-                                            ),
-                                        ]
-                                    )
-                                ],
-                                className="shadow-sm",
-                            ),
-                            md=4,
-                            className="mb-3",
-                        ),
-                        dbc.Col(
-                            dbc.Card(
-                                [
-                                    dbc.CardBody(
-                                        [
-                                            html.H6(
-                                                "Saldo",
-                                                className="text-muted",
-                                            ),
-                                            html.H3(
-                                                f"R$ {saldo:,.2f}",
-                                                className=(
-                                                    "text-info fw-bold"
-                                                    if saldo >= 0
-                                                    else "text-warning fw-bold"
-                                                ),
-                                            ),
-                                        ]
-                                    )
-                                ],
-                                className="shadow-sm",
-                            ),
-                            md=4,
-                            className="mb-3",
-                        ),
-                    ],
-                    className="mb-4",
-                ),
+                # Cards de Resumo Multi-Contas (Disponível, Faturas, Investimentos, Patrimônio, Detalhe por Conta)
+                dashboard_cards,
+                html.Hr(className="my-4"),
                 # Gráficos (Evolução + Top Despesas)
                 dbc.Row(
                     [
@@ -553,7 +507,8 @@ def render_page_content(
         elif pathname == "/despesas":
             logger.info("[DESPESAS] Carregando despesas...")
             try:
-                transacoes = get_transactions()
+                # Recuperar apenas despesas reais (excluir "Transferência Interna")
+                transacoes = get_transactions(exclude_transfers=True)
                 despesas = [t for t in transacoes if t.get("tipo") == "despesa"]
                 logger.info(f"✓ {len(despesas)} despesas carregadas")
 
@@ -698,6 +653,76 @@ def render_page_content(
                     f"Erro ao carregar categorias: {str(e)}",
                     color="danger",
                 )
+
+        elif pathname == "/contas":
+            logger.info("[CONTAS] Carregando gerenciador de contas...")
+            try:
+                contas = get_accounts()
+                # Converter Conta objects para dicts com emoji
+                contas_dict = []
+                for c in contas:
+                    conta_dict = c.to_dict()
+                    # Adicionar emoji baseado no tipo
+                    emoji_map = {
+                        "conta": "🏦",
+                        "cartao": "💳",
+                        "investimento": "📈",
+                    }
+                    conta_dict["emoji"] = emoji_map.get(c.tipo, "💰")
+                    contas_dict.append(conta_dict)
+
+                logger.info(f"✓ {len(contas_dict)} contas carregadas")
+                return dbc.Container(
+                    [
+                        html.H2("Contas", className="mb-4 fw-bold"),
+                        render_account_manager(contas_dict),
+                    ],
+                    fluid=True,
+                )
+            except Exception as e:
+                logger.error(f"✗ Erro ao carregar contas: {e}", exc_info=True)
+                return dbc.Alert(
+                    f"Erro ao carregar contas: {str(e)}",
+                    color="danger",
+                )
+
+        elif pathname == "/importar":
+            logger.info("[IMPORTADOR] Carregando interface de importação...")
+            contas = get_accounts()
+            account_options = [
+                {
+                    "label": f"{conta.emoji if hasattr(conta, 'emoji') else ''} {conta.nome if hasattr(conta, 'nome') else conta.get('nome', '')}",
+                    "value": conta.id if hasattr(conta, 'id') else conta.get('id'),
+                }
+                for conta in contas
+            ]
+            
+            # Get existing tags for tag editor
+            try:
+                existing_tags = get_unique_tags_list()
+            except Exception as e:
+                logger.warning(f"[IMPORTADOR] Erro ao buscar tags: {e}")
+                existing_tags = []
+            
+            return render_importer_page(account_options=account_options, existing_tags=existing_tags)
+
+        # ===== ROTA DINÂMICA: Extrato de Conta /contas/<conta_id> =====
+        elif re.match(r"^/contas/\d+$", pathname):
+            # Extrair conta_id da URL
+            match = re.match(r"^/contas/(\d+)$", pathname)
+            if match:
+                conta_id = int(match.group(1))
+                logger.info(f"[EXTRATO] Carregando extrato da conta {conta_id}...")
+                try:
+                    return render_account_extract(conta_id)
+                except Exception as e:
+                    logger.error(
+                        f"[EXTRATO] Erro ao carregar extrato: {e}", exc_info=True
+                    )
+                    return dbc.Alert(
+                        f"Erro ao carregar extrato: {str(e)}",
+                        color="danger",
+                    )
 
         else:
             logger.warning(f"[404] Página desconhecida: {pathname}")
@@ -1649,10 +1674,10 @@ def update_tag_dropdowns(
     State("input-receita-descricao", "value"),
     State("dcc-receita-data", "date"),
     State("dcc-receita-categoria", "value"),
-    State("input-receita-origem", "value"),
     State("dropdown-receita-tag", "value"),
     State("check-receita-recorrente", "value"),
     State("select-receita-frequencia", "value"),
+    State("select-receita-conta", "value"),
     State("modal-transacao", "is_open"),
     prevent_initial_call=True,
     allow_duplicate=True,
@@ -1663,10 +1688,10 @@ def save_receita(
     descricao: str,
     data: str,
     categoria_id: int,
-    pessoa_origem: str,
     tag: Optional[list],
     is_recorrente: List,
     frequencia_recorrencia: str,
+    conta_id: int,
     modal_is_open: bool,
 ):
     """
@@ -1682,20 +1707,22 @@ def save_receita(
         descricao: Descrição da receita.
         data: Data em formato YYYY-MM-DD.
         categoria_id: ID da categoria.
-        pessoa_origem: Pessoa/entidade de origem.
         tag: Tags opcionais para entidade/agrupamento (ex: ['Mãe', 'Saúde']).
              Pode ser uma lista (multi=True) ou None. Será salvo como CSV se houver múltiplas.
         is_recorrente: Lista com valor 1 se recorrente, vazia se não.
         frequencia_recorrencia: Frequência (mensal, quinzenal, semanal).
+        conta_id: ID da conta selecionada.
         modal_is_open: Estado atual do modal.
 
     Returns:
         Tuple (alerta_aberto, mensagem_alerta, modal_aberto, timestamp).
     """
 
-    logger.info(f"💾 Salvando receita: {descricao} - R${valor} (tag={tag})")
+    logger.info(f"💾 Salvando receita: {descricao} - R${valor} (conta_id={conta_id})")
 
-    if not all([valor, descricao, data, categoria_id]):
+    if not all([valor, descricao, data, categoria_id, conta_id]):
+        msg_erro = "❌ Preencha todos os campos obrigatórios, incluindo a conta!"
+        logger.warning(f"⚠️ {msg_erro}")
         msg_erro = "❌ Preencha todos os campos obrigatórios!"
         logger.warning(f"⚠️ {msg_erro}")
         return (
@@ -1721,7 +1748,7 @@ def save_receita(
             valor=float(valor),
             data=data_obj,
             categoria_id=int(categoria_id),
-            pessoa_origem=pessoa_origem,
+            conta_id=int(conta_id),
             tag=tag,
             is_recorrente=eh_recorrente,
             frequencia_recorrencia=frequencia_recorrencia if eh_recorrente else None,
@@ -1775,11 +1802,11 @@ def save_receita(
     State("input-despesa-descricao", "value"),
     State("dcc-despesa-data", "date"),
     State("dcc-despesa-categoria", "value"),
-    State("select-despesa-pagamento", "value"),
     State("input-despesa-parcelas", "value"),
     State("dropdown-despesa-tag", "value"),
     State("check-despesa-recorrente", "value"),
     State("select-despesa-frequencia", "value"),
+    State("select-despesa-conta", "value"),
     State("modal-transacao", "is_open"),
     prevent_initial_call=True,
     allow_duplicate=True,
@@ -1790,18 +1817,18 @@ def save_despesa(
     descricao: str,
     data: str,
     categoria_id: int,
-    forma_pagamento: str,
     numero_parcelas: int,
     tag: Optional[list],
     is_recorrente: List,
     frequencia_recorrencia: str,
+    conta_id: int,
     modal_is_open: bool,
 ):
     """
     Salva uma nova despesa no banco de dados.
 
-    Suporta parcelamento, forma de pagamento, recorrência e associação a tags
-    múltiplas. Atualiza store-transacao-salva ao salvar com sucesso, sinalizando
+    Suporta parcelamento, recorrência e associação a tags múltiplas.
+    Atualiza store-transacao-salva ao salvar com sucesso, sinalizando
     a atualização dos componentes dependentes (Fluxo de Caixa, Abas).
 
     Args:
@@ -1810,21 +1837,23 @@ def save_despesa(
         descricao: Descrição da despesa.
         data: Data em formato YYYY-MM-DD.
         categoria_id: ID da categoria.
-        forma_pagamento: Forma de pagamento (dinheiro, pix, credito, etc).
         numero_parcelas: Número de parcelas (default 1).
         tag: Tags opcionais para entidade/agrupamento (ex: ['Mãe', 'Saúde']).
              Pode ser uma lista (multi=True) ou None. Será salvo como CSV se houver múltiplas.
         is_recorrente: Lista com valor 1 se recorrente, vazia se não.
         frequencia_recorrencia: Frequência (mensal, quinzenal, semanal).
+        conta_id: ID da conta selecionada.
         modal_is_open: Estado atual do modal.
 
     Returns:
         Tuple (alerta_aberto, mensagem_alerta, modal_aberto, timestamp).
     """
 
-    logger.info(f"💾 Salvando despesa: {descricao} - R${valor} (tag={tag})")
+    logger.info(f"💾 Salvando despesa: {descricao} - R${valor} (conta_id={conta_id})")
 
-    if not all([valor, descricao, data, categoria_id]):
+    if not all([valor, descricao, data, categoria_id, conta_id]):
+        msg_erro = "❌ Preencha todos os campos obrigatórios, incluindo a conta!"
+        logger.warning(f"⚠️ {msg_erro}")
         msg_erro = "❌ Preencha todos os campos obrigatórios!"
         logger.warning(f"⚠️ {msg_erro}")
         return (
@@ -1847,12 +1876,50 @@ def save_despesa(
             int(numero_parcelas) if numero_parcelas and numero_parcelas > 0 else 1
         )
 
+        # Deduzir forma de pagamento baseado no tipo de conta
+        contas = get_accounts()
+        conta_selecionada = None
+        for c in contas:
+            c_id = c.id if hasattr(c, 'id') else c.get('id')
+            if c_id == conta_id:
+                conta_selecionada = c
+                break
+        
+        if not conta_selecionada:
+            msg_erro = "❌ Conta selecionada não encontrada."
+            logger.error(f"✗ {msg_erro}")
+            return (
+                True,
+                msg_erro,
+                True,
+                0,
+                dash.no_update,
+                dash.no_update,
+                dash.no_update,
+                dash.no_update,
+            )
+        
+        tipo_conta = conta_selecionada.tipo if hasattr(conta_selecionada, 'tipo') else conta_selecionada.get('tipo')
+        
+        # Deduzir forma de pagamento
+        if tipo_conta == 'cartao':
+            forma_pagamento = 'credito'
+            # Para crédito, usar parcelas selecionadas
+            num_parcelas = int(numero_parcelas) if numero_parcelas and numero_parcelas > 0 else 1
+            logger.info(f"[DESPESA] Forma de pagamento deducida: Crédito ({num_parcelas}x)")
+        else:
+            forma_pagamento = 'debito'
+            # Para débito/à vista, forçar 1 parcela
+            num_parcelas = 1
+            logger.info(f"[DESPESA] Forma de pagamento deducida: Débito (1x)")
+
         success, message = create_transaction(
             tipo="despesa",
             descricao=descricao,
             valor=float(valor),
             data=data_obj,
             categoria_id=int(categoria_id),
+            conta_id=int(conta_id),
             forma_pagamento=forma_pagamento,
             numero_parcelas=num_parcelas,
             tag=tag,
@@ -1959,30 +2026,6 @@ def toggle_modal_open(
         return True, "tab-despesa"
     else:
         return not is_open, "tab-despesa"
-
-
-@app.callback(
-    Output("input-despesa-parcelas", "style"),
-    Input("select-despesa-pagamento", "value"),
-    prevent_initial_call=True,
-)
-def toggle_parcelas_visibility(forma_pagamento: str) -> Dict:
-    """
-    Controla visibilidade do campo de parcelas baseado na forma de pagamento.
-
-    Mostra o campo de parcelas apenas quando a forma de pagamento é 'crédito'.
-
-    Args:
-        forma_pagamento: Forma de pagamento selecionada.
-
-    Returns:
-        Dict com propriedade 'display' para CSS.
-    """
-    if forma_pagamento and forma_pagamento.lower() == "credito":
-        logger.debug("💳 Mostrando campo de parcelas (Crédito selecionado)")
-        return {"display": "block"}
-    logger.debug("🚫 Ocultando campo de parcelas")
-    return {"display": "none"}
 
 
 @app.callback(
@@ -2270,6 +2313,1111 @@ def save_edit_category(
         raise PreventUpdate
 
 
+# ===== CALLBACKS DE IMPORTAÇÃO CSV =====
+
+
+@app.callback(
+    Output("preview-container", "children"),
+    Output("store-import-data", "data"),
+    Output("btn-save-import", "disabled"),
+    Output("btn-clear-import", "disabled"),
+    Output("upload-status", "children"),
+    Input("upload-data", "contents"),
+    State("upload-data", "filename"),
+    prevent_initial_call=True,
+)
+def update_import_preview(
+    contents: str,
+    filename: str,
+) -> tuple:
+    """Process CSV upload and show preview table.
+
+    Args:
+        contents: Base64-encoded file content from dcc.Upload
+        filename: Original filename
+
+    Returns:
+        Tuple of (preview_table, store_data, btn_disabled, clear_disabled, status_msg)
+    """
+    if not contents:
+        raise PreventUpdate
+
+    try:
+        logger.info(f"[IMPORT] Processando upload: {filename}")
+
+        # Extract base64 from Dash format
+        content_type, encoded = contents.split(",")
+
+        # Load classification history from database for smart suggestions
+        classification_history = get_classification_history()
+        logger.info(
+            f"[IMPORT] Histórico de classificação carregado: "
+            f"{len(classification_history)} entradas"
+        )
+
+        # Parse CSV with importer (with historical categorization)
+        transactions = parse_upload_content(
+            encoded,
+            filename,
+            classification_history=classification_history,
+        )
+
+        if not transactions:
+            logger.warning(f"[IMPORT] Arquivo {filename} retornou 0 transações")
+            return (
+                [],
+                None,
+                True,
+                True,
+                html.Div(
+                    "Nenhuma transação válida encontrada no arquivo.",
+                    className="alert alert-warning",
+                ),
+            )
+
+        logger.info(
+            f"[IMPORT] {len(transactions)} transações parseadas " f"de {filename}"
+        )
+
+        # Fetch categories from database for dropdown
+        category_options = []
+        try:
+            # Get categories for both types
+            cats_receita = get_categories(tipo="receita")
+            cats_despesa = get_categories(tipo="despesa")
+
+            # Combine all categories
+            todas_cats = cats_receita + cats_despesa
+
+            # Format for dropdown
+            category_options = [
+                {
+                    "label": cat.get("nome", cat.get("name")),
+                    "value": cat.get("nome", cat.get("name")),
+                }
+                for cat in todas_cats
+            ]
+
+            # Ensure "A Classificar" is in the list
+            classificar_values = [
+                opt["value"]
+                for opt in category_options
+                if opt["value"] == "A Classificar"
+            ]
+            if not classificar_values:
+                category_options.insert(
+                    0, {"label": "A Classificar", "value": "A Classificar"}
+                )
+
+            logger.info(
+                f"[IMPORT] {len(category_options)} categorias carregadas para dropdown"
+            )
+        except Exception as e:
+            logger.warning(f"[IMPORT] Erro ao buscar categorias: {e}")
+            # Fallback: at least have "A Classificar"
+            category_options = [{"label": "A Classificar", "value": "A Classificar"}]
+
+        # Get existing tags for dropdown
+        try:
+            existing_tags = get_unique_tags_list()
+            logger.info(
+                f"[IMPORT] {len(existing_tags)} tags únicas carregadas para dropdown"
+            )
+        except Exception as e:
+            logger.warning(f"[IMPORT] Erro ao buscar tags: {e}")
+            existing_tags = []
+
+        # Render preview table with category and tag options
+        preview = render_preview_table(transactions, category_options, existing_tags)
+
+        # Status message
+        status_msg = html.Div(
+            f"✅ {len(transactions)} transações carregadas de {filename}",
+            className="alert alert-success mt-3",
+        )
+
+        return (
+            preview,
+            transactions,
+            False,  # Enable save button
+            False,  # Enable clear button
+            status_msg,
+        )
+
+    except ValueError as e:
+        logger.error(f"[IMPORT] Erro ao fazer parse de {filename}: {e}")
+        return (
+            [],
+            None,
+            True,
+            True,
+            html.Div(
+                f"❌ Erro ao processar arquivo: {str(e)}",
+                className="alert alert-danger",
+            ),
+        )
+
+    except Exception as e:
+        logger.error(f"[IMPORT] Erro inesperado em {filename}: {e}", exc_info=True)
+        return (
+            [],
+            None,
+            True,
+            True,
+            html.Div(
+                f"❌ Erro inesperado: {str(e)}",
+                className="alert alert-danger",
+            ),
+        )
+
+
+def _transaction_exists(
+    session,
+    descricao: str,
+    valor: float,
+    data_futura: date,
+    conta_id: int,
+) -> bool:
+    """
+    Verifica se uma transação futura já existe no banco para evitar duplicatas.
+
+    Busca uma transação com a mesma descrição, valor, data e conta.
+    Usado para evitar recriar parcelas futuras em importações repetidas.
+
+    Args:
+        session: Sessão SQLAlchemy ativa.
+        descricao: Descrição da transação.
+        valor: Valor da transação.
+        data_futura: Data futura a verificar.
+        conta_id: ID da conta.
+
+    Returns:
+        True se transação existe, False caso contrário.
+    """
+    from src.database.models import Transacao
+    
+    transacao_existe = (
+        session.query(Transacao)
+        .filter(
+            Transacao.descricao == descricao,
+            Transacao.valor == valor,
+            Transacao.data == data_futura,
+            Transacao.conta_id == conta_id,
+        )
+        .first()
+    )
+    return transacao_existe is not None
+
+
+@app.callback(
+    Output("import-feedback", "children"),
+    Output("store-import-data", "data", allow_duplicate=True),
+    Output("preview-container", "children", allow_duplicate=True),
+    Output("upload-status", "children", allow_duplicate=True),
+    Input("btn-save-import", "n_clicks"),
+    State("table-import-preview", "data"),
+    State("dropdown-import-conta", "value"),
+    prevent_initial_call=True,
+    allow_duplicate=True,
+)
+def save_imported_transactions(
+    n_clicks: int,
+    table_data: List[Dict[str, Any]],
+    conta_id_selecionada: Optional[int],
+) -> tuple:
+    """Save imported transactions to database.
+
+    Processes the edited table data and inserts each transaction
+    into the database. If a transaction has installments (parcelas),
+    creates future transactions for remaining installments.
+
+    Args:
+        n_clicks: Button click count (used to trigger)
+        table_data: Edited data from DataTable
+        conta_id_selecionada: Selected account ID from dropdown
+
+    Returns:
+        Tuple of (feedback_alert, cleared_store, cleared_preview, cleared_status)
+    """
+    if not table_data:
+        logger.warning("[IMPORT] Tentativa de salvar com tabela vazia")
+        raise PreventUpdate
+
+    # Validação crítica: verificar se conta foi selecionada
+    if conta_id_selecionada is None:
+        logger.warning("[IMPORT] Tentativa de salvar sem selecionar conta")
+        feedback = dbc.Alert(
+            "⚠️ Por favor, selecione a conta de destino antes de confirmar.",
+            color="warning",
+            className="mt-3",
+        )
+        return (
+            feedback,
+            no_update,
+            no_update,
+            no_update,
+        )
+
+    try:
+        logger.info(
+            f"[IMPORT] Salvando {len(table_data)} transações na conta ID={conta_id_selecionada}..."
+        )
+
+        count = 0
+        count_parcelas_futuras = 0
+        skipped_count = 0
+        errors = []
+
+        for idx, row in enumerate(table_data, start=1):
+            try:
+                # Log detalhado dos dados recebidos (DEBUG DE TAGS)
+                logger.info(
+                    f"[SAVE] Processando linha {idx}: "
+                    f"Desc='{row.get('descricao')}' | "
+                    f"Cat='{row.get('categoria')}' | "
+                    f"Tags='{row.get('tags')}'"
+                )
+                
+                # Skip rows marked as filtered/disabled
+                if row.get("skipped") or row.get("disable_edit"):
+                    logger.info(
+                        f"[IMPORT] ⊘ Linha {idx} ignorada (marcada como desabilitada)"
+                    )
+                    continue
+
+                # Parse values from table
+                data_str = row.get("data", "").strip()
+                descricao = row.get("descricao", "Sem descrição").strip()
+                valor_str = row.get("valor", "0").strip()
+                tipo_str = row.get("tipo", "").strip()
+                categoria_nome = row.get("categoria", "A Classificar").strip()
+                tags_str = row.get("tags", "").strip()
+
+                # Parse valor (remove R$ and comma)
+                valor = float(valor_str.replace("R$", "").replace(",", ".").strip())
+
+                # Parse tipo (extract from emoji text)
+                if "Receita" in tipo_str or "receita" in tipo_str:
+                    tipo = "receita"
+                elif "Despesa" in tipo_str or "despesa" in tipo_str:
+                    tipo = "despesa"
+                else:
+                    tipo = "despesa"  # Default
+
+                # Parse tags: convert comma-separated string to list
+                tags_list = []
+                tags_str = row.get('tags')
+                if tags_str and isinstance(tags_str, str):
+                    tags_list = [t.strip() for t in tags_str.split(',') if t.strip()]
+
+                # Parse date
+                data_obj = datetime.strptime(data_str, "%Y-%m-%d").date()
+
+                # Get categoria ID by name
+                categoria_id = None
+                try:
+                    from src.database.connection import get_db
+                    from src.database.models import Categoria
+
+                    with get_db() as session:
+                        categoria = (
+                            session.query(Categoria)
+                            .filter_by(nome=categoria_nome)
+                            .first()
+                        )
+                        if categoria:
+                            categoria_id = categoria.id
+                        else:
+                            logger.warning(
+                                f"[IMPORT] Categoria '{categoria_nome}' não encontrada. "
+                                f"Usando 'A Classificar'."
+                            )
+                            # Try to find "A Classificar" as fallback
+                            categoria_fallback = (
+                                session.query(Categoria)
+                                .filter_by(nome="A Classificar", tipo=tipo)
+                                .first()
+                            )
+                            if categoria_fallback:
+                                categoria_id = categoria_fallback.id
+                except Exception as e:
+                    logger.error(f"[IMPORT] Erro ao buscar categoria: {e}")
+                    categoria_id = None
+
+                if not categoria_id:
+                    errors.append(
+                        f"Linha {idx}: Categoria '{categoria_nome}' não encontrada."
+                    )
+                    logger.warning(
+                        f"[IMPORT] Erro na linha {idx}: Categoria não encontrada"
+                    )
+                    continue
+
+                # Use selected conta_id from dropdown
+                conta_id = conta_id_selecionada
+
+                # ===== VERIFICAR DUPLICIDADE =====
+                # Checar se a transação já existe no banco
+                with get_db() as session:
+                    if _transaction_exists(session, descricao, valor, data_obj, conta_id):
+                        skipped_count += 1
+                        logger.info(
+                            f"[IMPORT] 🔄 Duplicata ignorada (linha {idx}): "
+                            f"{descricao} R$ {valor:.2f} em {data_obj}"
+                        )
+                        continue
+
+                success, message = create_transaction(
+                    data=data_obj,
+                    descricao=descricao,
+                    valor=valor,
+                    tipo=tipo,
+                    categoria_id=categoria_id,
+                    conta_id=conta_id,
+                    tags=tags_str,
+                )
+
+                if not success:
+                    errors.append(f"Linha {idx}: {message}")
+                    logger.warning(f"[IMPORT] Erro na linha {idx}: {message}")
+                else:
+                    count += 1
+                    logger.info(
+                        f"[IMPORT] ✓ Transação {idx} salva: "
+                        f"{tipo} {descricao} R$ {valor} | "
+                        f"Categoria: {categoria_nome} | Tags: {', '.join(tags_list) if tags_list else 'nenhuma'}"
+                    )
+
+                    # ===== CRIAR PARCELAS FUTURAS SE HOUVER =====
+                    parcela_atual = row.get("parcela_atual")
+                    total_parcelas = row.get("total_parcelas")
+
+                    if parcela_atual and total_parcelas:
+                        try:
+                            parcela_atual = int(parcela_atual)
+                            total_parcelas = int(total_parcelas)
+
+                            # Verificar explicitamente se há parcelas futuras a criar
+                            if parcela_atual and total_parcelas and parcela_atual < total_parcelas:
+                                logger.info(
+                                    f"[PARCELAS] 🔄 Processando parcelas para '{descricao}': {parcela_atual}/{total_parcelas}"
+                                )
+
+                                # Usar a mesma sessão do banco para evitar conflitos
+                                with get_db() as session:
+                                    # Loop para criar parcelas futuras
+                                    for i in range(parcela_atual + 1, total_parcelas + 1):
+                                        # Calcular data futura: adicionar (i - parcela_atual) meses
+                                        meses_offset = i - parcela_atual
+                                        data_futura = data_obj + relativedelta(
+                                            months=meses_offset
+                                        )
+
+                                        logger.debug(
+                                            f"[PARCELAS] Calculando parcela {i}/{total_parcelas}: "
+                                            f"data_obj={data_obj} + {meses_offset} meses = {data_futura}"
+                                        )
+
+                                        # Atualizar descrição: adicionar "(Proj. X/Y)" para indicar que foi gerada
+                                        # Padrão: encontrar o último "XX/YY" e substituir, depois adicionar (Proj.)
+                                        desc_futura = re.sub(
+                                            r"(\d{1,2})(/|-)(\d{1,2})(?!.*\d{1,2}/\d{1,2})",
+                                            lambda m: f"{i}{m.group(2)}{total_parcelas}",
+                                            descricao,
+                                        )
+                                        # Adicionar marcação de projeção se não tiver
+                                        if "(Proj." not in desc_futura:
+                                            desc_futura = f"{desc_futura} (Proj. {i}/{total_parcelas})"
+
+                                        # Verificar se parcela já existe
+                                        if _transaction_exists(
+                                            session, desc_futura, valor, data_futura, conta_id
+                                        ):
+                                            logger.debug(
+                                                f"[PARCELAS] ✓ Parcela {i}/{total_parcelas} já existe "
+                                                f"(data: {data_futura}), pulando..."
+                                            )
+                                            continue
+
+                                        # Criar transação futura
+                                        success_parcela, msg_parcela = create_transaction(
+                                            data=data_futura,
+                                            descricao=desc_futura,
+                                            valor=valor,
+                                            tipo=tipo,
+                                            categoria_id=categoria_id,
+                                            conta_id=conta_id,
+                                            tags=tags_str,
+                                        )
+
+                                        if success_parcela:
+                                            count_parcelas_futuras += 1
+                                            logger.info(
+                                                f"[PARCELAS] ✓ Parcela {i}/{total_parcelas} criada: "
+                                                f"{desc_futura} em {data_futura}"
+                                            )
+                                        else:
+                                            logger.warning(
+                                                f"[PARCELAS] ✗ Erro ao criar parcela {i}/{total_parcelas}: {msg_parcela}"
+                                            )
+                            else:
+                                logger.debug(
+                                    f"[PARCELAS] Nenhuma parcela futura a criar (parcela_atual={parcela_atual}, total={total_parcelas})"
+                                )
+
+                        except (ValueError, TypeError) as e:
+                            logger.warning(
+                                f"[PARCELAS] Erro ao processar parcelas para linha {idx}: {e}"
+                            )
+
+            except Exception as e:
+                errors.append(f"Linha {idx}: {str(e)}")
+                logger.error(f"[IMPORT] Erro ao processar linha {idx}: {e}")
+                continue
+
+        # Return feedback
+        if count > 0:
+            msg_duplicatas = (
+                f" {skipped_count} duplicatas ignoradas."
+                if skipped_count > 0
+                else ""
+            )
+            msg_parcelas = (
+                f"\n🔄 Parcelas futuras criadas: {count_parcelas_futuras}"
+                if count_parcelas_futuras > 0
+                else ""
+            )
+            feedback = render_import_success(
+                f"{count} transações importadas.{msg_duplicatas}{msg_parcelas}"
+            )
+            logger.info(
+                f"[IMPORT] ✅ {count} transações importadas com sucesso"
+                f" ({count_parcelas_futuras} parcelas futuras criadas)"
+            )
+
+        elif skipped_count > 0:
+            # Special case: All duplicates (not an error!)
+            feedback = dbc.Alert(
+                [
+                    html.H4("ℹ️ Nenhuma nova transação", className="alert-heading"),
+                    html.P(
+                        f"Todas as {skipped_count} transações deste arquivo já existem "
+                        "no banco de dados e foram ignoradas."
+                    )
+                ],
+                color="info",
+                dismissable=True
+            )
+            logger.info(
+                f"[IMPORT] ℹ️ Arquivo continha apenas duplicatas ({skipped_count} ignoradas)"
+            )
+
+        else:
+            # Real error case (empty file or nothing saved due to error)
+            error_msg = "; ".join(errors) if errors else "Nenhuma transação importada"
+            feedback = render_import_error(f"✗ Importação falhou: {error_msg}")
+            logger.error(f"[IMPORT] ✗ Importação falhou: {error_msg}")
+
+        # Clear data after save
+        return (
+            feedback,
+            None,  # Clear store
+            [],  # Clear preview
+            html.Div(),  # Clear status
+        )
+
+    except Exception as e:
+        logger.error(f"[IMPORT] Erro crítico ao salvar: {e}", exc_info=True)
+        feedback = render_import_error(f"Erro crítico: {str(e)}")
+        return feedback, None, [], html.Div()
+
+
+@app.callback(
+    Output("store-import-data", "data", allow_duplicate=True),
+    Output("preview-container", "children", allow_duplicate=True),
+    Output("upload-status", "children", allow_duplicate=True),
+    Output("btn-save-import", "disabled", allow_duplicate=True),
+    Output("btn-clear-import", "disabled", allow_duplicate=True),
+    Input("btn-clear-import", "n_clicks"),
+    prevent_initial_call=True,
+    allow_duplicate=True,
+)
+def clear_import_data(n_clicks: int) -> tuple:
+    """Clear all import data and reset UI.
+
+    Args:
+        n_clicks: Button click count
+
+    Returns:
+        Tuple of reset values
+    """
+    logger.info("[IMPORT] Limpando dados de importação...")
+    return (
+        None,  # Clear store
+        [],  # Clear preview
+        html.Div(),  # Clear status
+        True,  # Disable save
+        True,  # Disable clear
+    )
+
+
+# ===== ACCOUNT MANAGEMENT CALLBACKS =====
+
+
+@app.callback(
+    Output("select-receita-conta", "options"),
+    Output("select-receita-conta", "value"),
+    Input("modal-transacao", "is_open"),
+    State("tabs-modal-transacao", "value"),
+    prevent_initial_call=True,
+)
+def update_receita_conta_options(is_open, tab_value):
+    """
+    Atualiza opções de conta para receitas (conta e investimento).
+
+    Quando o modal abre na aba de receita, popula o dropdown com
+    apenas contas do tipo "conta" ou "investimento".
+    """
+    logger.debug(f"[RECEITA] Modal aberto: {is_open}, Tab: {tab_value}")
+    if not is_open or tab_value != "tab-receita":
+        logger.debug(f"[RECEITA] Ignorando callback (aberto={is_open}, tab_receita={tab_value == 'tab-receita'})")
+        return [], None
+
+    try:
+        contas = get_accounts()
+        logger.info(f"[RECEITA] Total de contas no banco: {len(contas)}")
+        
+        receita_contas = [
+            c for c in contas 
+            if (hasattr(c, 'tipo') and c.tipo in ["conta", "investimento"]) or
+               (isinstance(c, dict) and c.get("tipo") in ["conta", "investimento"])
+        ]
+        logger.info(f"[RECEITA] Contas filtradas para receita: {len(receita_contas)}")
+
+        emoji_map = {
+            "conta": "🏦",
+            "cartao": "💳",
+            "investimento": "📈",
+        }
+
+        options = [
+            {
+                "label": f'{emoji_map.get(c.tipo if hasattr(c, "tipo") else c.get("tipo"), "💰")} {c.nome if hasattr(c, "nome") else c.get("nome")}',
+                "value": c.id if hasattr(c, "id") else c.get("id"),
+            }
+            for c in receita_contas
+        ]
+
+        logger.info(f"✓ {len(options)} contas carregadas para receita: {[opt['label'] for opt in options]}")
+        return options, None
+
+    except Exception as e:
+        logger.error(f"✗ Erro ao carregar contas de receita: {e}", exc_info=True)
+        return [], None
+
+
+@app.callback(
+    Output("select-despesa-conta", "options"),
+    Output("select-despesa-conta", "value"),
+    Input("modal-transacao", "is_open"),
+    State("tabs-modal-transacao", "value"),
+    prevent_initial_call=True,
+)
+def update_despesa_conta_options(is_open, tab_value):
+    """
+    Atualiza opções de conta para despesas (conta e cartão).
+
+    Quando o modal abre na aba de despesa, popula o dropdown com
+    apenas contas do tipo "conta" ou "cartao".
+    """
+    logger.debug(f"[DESPESA] Modal aberto: {is_open}, Tab: {tab_value}")
+    if not is_open or tab_value != "tab-despesa":
+        logger.debug(f"[DESPESA] Ignorando callback (aberto={is_open}, tab_despesa={tab_value == 'tab-despesa'})")
+        return [], None
+
+    try:
+        contas = get_accounts()
+        logger.info(f"[DESPESA] Total de contas no banco: {len(contas)}")
+        
+        despesa_contas = [
+            c for c in contas 
+            if (hasattr(c, 'tipo') and c.tipo in ["conta", "cartao"]) or
+               (isinstance(c, dict) and c.get("tipo") in ["conta", "cartao"])
+        ]
+        logger.info(f"[DESPESA] Contas filtradas para despesa: {len(despesa_contas)}")
+
+        emoji_map = {
+            "conta": "🏦",
+            "cartao": "💳",
+            "investimento": "📈",
+        }
+
+        options = [
+            {
+                "label": f'{emoji_map.get(c.tipo if hasattr(c, "tipo") else c.get("tipo"), "💰")} {c.nome if hasattr(c, "nome") else c.get("nome")}',
+                "value": c.id if hasattr(c, "id") else c.get("id"),
+            }
+            for c in despesa_contas
+        ]
+
+        logger.info(f"✓ {len(options)} contas carregadas para despesa: {[opt['label'] for opt in options]}")
+        return options, None
+
+    except Exception as e:
+        logger.error(f"✗ Erro ao carregar contas de despesa: {e}", exc_info=True)
+        return [], None
+
+
+@app.callback(
+    Output("container-parcelas", "style"),
+    Input("select-despesa-conta", "value"),
+    prevent_initial_call=True,
+)
+def toggle_parcelas_visibility(conta_id: Optional[int]) -> Dict:
+    """
+    Mostra/esconde o campo de parcelas baseado na conta selecionada.
+
+    Se a conta for do tipo 'cartao' (crédito), mostra o campo de parcelas.
+    Caso contrário, mantém oculto.
+
+    Args:
+        conta_id: ID da conta selecionada no dropdown.
+
+    Returns:
+        Dict com propriedade 'display' para CSS.
+    """
+    if not conta_id:
+        logger.debug("[PARCELAS] Nenhuma conta selecionada")
+        return {'display': 'none'}
+
+    try:
+        contas = get_accounts()
+        conta_selecionada = None
+        
+        for c in contas:
+            c_id = c.id if hasattr(c, 'id') else c.get('id')
+            if c_id == conta_id:
+                conta_selecionada = c
+                break
+        
+        if not conta_selecionada:
+            logger.warning(f"[PARCELAS] Conta não encontrada: ID {conta_id}")
+            return {'display': 'none'}
+        
+        tipo_conta = conta_selecionada.tipo if hasattr(conta_selecionada, 'tipo') else conta_selecionada.get('tipo')
+        logger.info(f"[PARCELAS] Conta selecionada: tipo={tipo_conta}")
+        
+        if tipo_conta == 'cartao':
+            logger.info(f"[PARCELAS] Mostrando campo de parcelas (Cartão de Crédito)")
+            return {'display': 'block'}
+        else:
+            logger.info(f"[PARCELAS] Ocultando campo de parcelas (Conta Corrente)")
+            return {'display': 'none'}
+            
+    except Exception as e:
+        logger.error(f"[PARCELAS] Erro ao verificar tipo de conta: {e}", exc_info=True)
+        return {'display': 'none'}
+
+
+@app.callback(
+    Output("account-feedback-alert", "children"),
+    Output("account-feedback-alert", "is_open"),
+    Output("accounts-list-container", "children"),
+    Output("input-nome-conta", "value"),
+    Output("input-saldo-inicial", "value"),
+    Input("btn-salvar-conta", "n_clicks"),
+    State("input-nome-conta", "value"),
+    State("dropdown-tipo-conta", "value"),
+    State("input-saldo-inicial", "value"),
+    prevent_initial_call=True,
+)
+def save_new_account(n_clicks, nome, tipo, saldo):
+    """
+    Cria nova conta a partir dos inputs do formulário.
+
+    Valida entrada, chama create_account(), atualiza a lista de contas
+    e limpa o formulário após sucesso.
+
+    Saldo inicial é opcional e assume 0.0 se não preenchido.
+    """
+    if not n_clicks:
+        raise PreventUpdate
+
+    # Validar campos obrigatórios (nome e tipo)
+    if not nome or not tipo:
+        return (
+            dbc.Alert(
+                "Preencha os campos obrigatórios: Nome e Tipo.",
+                color="warning",
+            ),
+            True,
+            dash.no_update,
+            dash.no_update,
+            dash.no_update,
+        )
+
+    # Saldo inicial é opcional: default 0.0 se vazio ou None
+    if saldo is None or saldo == "":
+        saldo_float = 0.0
+    else:
+        try:
+            saldo_float = float(str(saldo).replace(",", "."))
+        except ValueError:
+            return (
+                dbc.Alert(
+                    "Saldo Inicial deve ser um número válido (ou deixe vazio para 0).",
+                    color="warning",
+                ),
+                True,
+                dash.no_update,
+                dash.no_update,
+                dash.no_update,
+            )
+
+    try:
+        success, message = create_account(nome, tipo, saldo_float)
+
+        if success:
+            logger.info(f"✓ Conta '{nome}' criada com sucesso (Saldo: R$ {saldo_float:.2f})")
+            # Buscar lista atualizada e gerar novo grid
+            contas = get_accounts()
+            novo_grid = render_accounts_grid(contas)
+            
+            return (
+                dbc.Alert(
+                    f"✓ Conta '{nome}' criada com sucesso!",
+                    color="success",
+                ),
+                True,
+                novo_grid,
+                "",  # Limpar nome
+                "",  # Limpar saldo
+            )
+        else:
+            logger.warning(f"✗ Erro ao criar conta: {message}")
+            return (
+                dbc.Alert(f"Erro: {message}", color="danger"),
+                True,
+                dash.no_update,
+                dash.no_update,
+                dash.no_update,
+            )
+
+    except Exception as e:
+        logger.error(f"✗ Erro ao salvar conta: {e}")
+        return (
+            dbc.Alert(f"Erro ao salvar conta: {str(e)}", color="danger"),
+            True,
+            dash.no_update,
+            dash.no_update,
+            dash.no_update,
+        )
+
+
+@app.callback(
+    Output("account-feedback-alert", "children", allow_duplicate=True),
+    Output("account-feedback-alert", "is_open", allow_duplicate=True),
+    Output("accounts-list-container", "children", allow_duplicate=True),
+    Input({"type": "btn-excluir-conta", "index": ALL}, "n_clicks"),
+    State({"type": "btn-excluir-conta", "index": ALL}, "id"),
+    prevent_initial_call=True,
+)
+def delete_account_callback(n_clicks, btn_ids):
+    """
+    Deleta uma conta ao clicar no botão de exclusão.
+
+    Usa pattern matching para identificar qual conta foi clicada,
+    chama delete_account() para removê-la e atualiza a lista.
+    """
+    if not ctx.triggered or not any(n_clicks):
+        raise PreventUpdate
+
+    # Encontrar qual botão foi clicado
+    trigger_id = ctx.triggered[0]["prop_id"].split(".")[0]
+    trigger_data = json.loads(trigger_id)
+    conta_id = trigger_data.get("index")
+
+    if not conta_id:
+        raise PreventUpdate
+
+    try:
+        success, message = delete_account(conta_id)
+
+        if success:
+            logger.info(f"✓ Conta {conta_id} deletada com sucesso")
+            # Buscar lista atualizada e gerar novo grid
+            contas = get_accounts()
+            novo_grid = render_accounts_grid(contas)
+            
+            return (
+                dbc.Alert(
+                    "✓ Conta deletada com sucesso!",
+                    color="success",
+                ),
+                True,
+                novo_grid,
+            )
+        else:
+            logger.warning(f"✗ Erro ao deletar conta: {message}")
+            return (
+                dbc.Alert(f"Erro: {message}", color="danger"),
+                True,
+                dash.no_update,
+            )
+
+    except Exception as e:
+        logger.error(f"✗ Erro ao deletar conta: {e}")
+        return (
+            dbc.Alert(f"Erro ao deletar conta: {str(e)}", color="danger"),
+            True,
+            dash.no_update,
+        )
+
+
+# ===== TAG EDITOR MODAL CALLBACKS =====
+
+
+@app.callback(
+    Output("modal-tag-editor", "is_open"),
+    Output("dropdown-tag-editor", "options", allow_duplicate=True),
+    Output("dropdown-tag-editor", "value"),
+    Output("store-editing-row-index", "data"),
+    Input("table-import-preview", "active_cell"),
+    State("table-import-preview", "data"),
+    prevent_initial_call=True,
+)
+def open_tag_editor_modal(
+    active_cell: Dict[str, Any],
+    table_data: List[Dict[str, Any]],
+) -> tuple:
+    """
+    Abre o editor de tags quando uma célula da coluna 'tags' é clicada.
+
+    Extrai as tags atuais, converte para lista, carrega opções do banco
+    e abre o modal para edição.
+
+    Args:
+        active_cell: Célula ativa do DataTable (ex: {"row": 2, "column_id": "tags"})
+        table_data: Dados completos da tabela
+
+    Returns:
+        Tuple: (modal_is_open, dropdown_options, dropdown_value, row_index)
+    """
+    # DEBUG: Imprimir clique detectado
+    print(f"DEBUG: Clique detectado em {active_cell}")
+    
+    if not active_cell or not table_data:
+        raise PreventUpdate
+
+    # Verificar se a célula clicada é na coluna 'tags'
+    row_idx = active_cell.get("row")
+    col_id = active_cell.get("column_id")
+    
+    # DEBUG: Imprimir detalhes da célula
+    print(f"DEBUG: row_idx={row_idx}, col_id={col_id}")
+
+    # Verificar se é a coluna 'tags'
+    if col_id != "tags":
+        print(f"DEBUG: Coluna inválida ({col_id}), ignorando clique")
+        raise PreventUpdate
+
+    try:
+        # Pegar tags atuais da linha clicada
+        if row_idx < len(table_data):
+            current_row = table_data[row_idx]
+            tags_str = current_row.get("tags", "")
+            
+            print(f"DEBUG: Tags atuais na linha {row_idx}: '{tags_str}'")
+
+            # Converter tags string em lista (split por vírgula)
+            tags_list = []
+            if tags_str:
+                tags_list = [tag.strip() for tag in tags_str.split(",") if tag.strip()]
+            
+            print(f"DEBUG: Tags parseadas em lista: {tags_list}")
+
+            # Carregar lista de tags únicas do banco
+            existing_tags = get_unique_tags_list()
+            dropdown_options = [{"label": tag, "value": tag} for tag in existing_tags]
+            
+            print(f"DEBUG: Opcoes carregadas do banco: {len(existing_tags)} tags unicas")
+
+            logger.info(
+                f"[TAGS] Modal aberto para linha {row_idx}: "
+                f"{len(tags_list)} tags selecionadas"
+            )
+            
+            print(f"DEBUG: Modal aberto com sucesso!")
+
+            return (
+                True,  # Abrir modal
+                dropdown_options,  # Options do dropdown
+                tags_list,  # Value pré-selecionado
+                row_idx,  # Guardar índice da linha
+            )
+        else:
+            logger.warning(f"[TAGS] Índice de linha inválido: {row_idx}")
+            print(f"DEBUG: row_idx={row_idx} >= len(table_data)={len(table_data)}")
+            raise PreventUpdate
+
+    except Exception as e:
+        logger.error(f"[TAGS] Erro ao abrir editor: {e}")
+        print(f"DEBUG: ERRO ao abrir editor: {e}")
+        raise PreventUpdate
+
+
+@app.callback(
+    Output("table-import-preview", "data"),
+    Output("modal-tag-editor", "is_open", allow_duplicate=True),
+    Input("btn-save-tags", "n_clicks"),
+    State("dropdown-tag-editor", "value"),
+    State("store-editing-row-index", "data"),
+    State("table-import-preview", "data"),
+    prevent_initial_call=True,
+)
+def save_tags_to_table(
+    n_clicks: int,
+    selected_tags: List[str],
+    row_index: int,
+    table_data: List[Dict[str, Any]],
+) -> tuple:
+    """
+    Salva as tags selecionadas de volta à tabela e fecha o modal.
+
+    Converte a lista de tags em string, atualiza a linha correspondente
+    na tabela e fecha o modal de edição.
+
+    Args:
+        n_clicks: Número de cliques no botão Salvar
+        selected_tags: Lista de tags selecionadas no dropdown
+        row_index: Índice da linha sendo editada
+        table_data: Dados completos da tabela
+
+    Returns:
+        Tuple: (updated_table_data, modal_is_open)
+    """
+    if not n_clicks or row_index is None or not table_data:
+        raise PreventUpdate
+
+    try:
+        # Fazer cópia para não mutar original
+        updated_data = [row.copy() for row in table_data]
+
+        # Converter lista de tags em string (ex: "Tag1, Tag2, Tag3")
+        tags_str = ", ".join(selected_tags) if selected_tags else ""
+
+        # Atualizar a linha correspondente
+        if row_index < len(updated_data):
+            updated_data[row_index]["tags"] = tags_str
+
+            logger.info(
+                f"[TAGS] Salvadas {len(selected_tags)} tags na linha {row_index}: "
+                f"{tags_str}"
+            )
+
+            return (
+                updated_data,  # Retornar tabela atualizada
+                False,  # Fechar modal
+            )
+        else:
+            logger.warning(f"[TAGS] Índice de linha inválido: {row_index}")
+            raise PreventUpdate
+
+    except Exception as e:
+        logger.error(f"[TAGS] Erro ao salvar tags: {e}")
+        raise PreventUpdate
+
+
+@app.callback(
+    Output("modal-tag-editor", "is_open", allow_duplicate=True),
+    Output("dropdown-tag-editor", "value", allow_duplicate=True),
+    Input("btn-cancel-tags", "n_clicks"),
+    prevent_initial_call=True,
+)
+def cancel_tag_editor_modal(n_clicks: int) -> tuple:
+    """
+    Fecha o editor de tags sem salvar alterações.
+
+    Args:
+        n_clicks: Número de cliques no botão Cancelar
+
+    Returns:
+        Tuple: (modal_is_open, dropdown_value_reset)
+    """
+    if not n_clicks:
+        raise PreventUpdate
+
+    logger.info("[TAGS] Modal cancelado")
+    return (
+        False,  # Fechar modal
+        [],  # Resetar dropdown
+    )
+
+
+@app.callback(
+    Output("dropdown-tag-editor", "options", allow_duplicate=True),
+    Input("dropdown-tag-editor", "search_value"),
+    State("dropdown-tag-editor", "options"),
+    prevent_initial_call=True,
+)
+def add_new_tag_option(
+    search_value: str,
+    existing_options: List[Dict[str, str]],
+) -> List[Dict[str, str]]:
+    """
+    Permite criar novas tags digitando no dropdown.
+    
+    Quando o usuário digita um valor que não existe na lista de opções,
+    adiciona dinamicamente como uma nova opção válida (feature "Type to Create").
+
+    Args:
+        search_value: Texto digitado pelo usuário no dropdown
+        existing_options: Lista atual de opções {'label': tag, 'value': tag}
+
+    Returns:
+        List[Dict[str, str]]: Lista atualizada de opções com nova tag se aplicável
+    """
+    # Se nenhum valor foi digitado, não fazer nada
+    if not search_value or not isinstance(search_value, str):
+        raise PreventUpdate
+
+    # Normalizar o valor para comparação (lowercase, strip whitespace)
+    # Se após strip ficar vazio, rejeitar
+    normalized_search = search_value.strip().lower()
+    
+    if not normalized_search:  # Se vazio após strip, rejeitar
+        raise PreventUpdate
+    
+    print(f"DEBUG: search_value digitado: '{search_value}'")
+    print(f"DEBUG: Verificando se já existe na lista...")
+
+    # Verificar se a tag já existe (case-insensitive)
+    tag_exists = any(
+        opt.get("value", "").lower() == normalized_search
+        for opt in existing_options
+    )
+
+    if tag_exists:
+        print(f"DEBUG: Tag '{search_value}' já existe, ignorando")
+        raise PreventUpdate
+
+    # Tag não existe, criar nova opção
+    new_option = {
+        "label": search_value,
+        "value": search_value,
+    }
+    
+    print(f"DEBUG: Criando nova tag: {new_option}")
+
+    # Adicionar à lista existente
+    updated_options = existing_options + [new_option]
+
+    logger.info(f"[TAGS] Nova tag criada via dropdown: '{search_value}'")
+    print(f"DEBUG: Lista de opcoes atualizada: {len(updated_options)} tags")
+
+    return updated_options
+
+
 if __name__ == "__main__":
     # ===== INICIALIZAÇÃO AUTOMÁTICA DO BANCO DE DADOS =====
     print("\n" + "=" * 70)
@@ -2281,6 +3429,11 @@ if __name__ == "__main__":
         logger.info("[SETUP] Verificando estrutura de diretórios...")
         init_database()
         logger.info("[SETUP] Banco de dados pronto!")
+        
+        # Initialize default accounts and categories
+        ensure_default_accounts()
+        ensure_default_categories()
+        
         print("✅ Banco de dados inicializado com sucesso")
 
     except Exception as e:

@@ -1,10 +1,14 @@
 """Quick test script for dashboard charts."""
+
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.components.dashboard_charts import render_evolution_chart, render_top_expenses_chart
+from src.components.dashboard_charts import (
+    render_evolution_chart,
+    render_top_expenses_chart,
+)
 
 # Test 1: render_evolution_chart
 sample_matrix = {

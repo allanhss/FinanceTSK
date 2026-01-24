@@ -7,6 +7,7 @@ declarativos para o aplicativo FinanceTSK.
 
 import logging
 import os
+import sys
 from pathlib import Path
 from contextlib import contextmanager
 from typing import Generator
@@ -21,6 +22,57 @@ load_dotenv()
 # Configurar logger
 logger = logging.getLogger(__name__)
 
+
+# ===== DETECÇÃO ROBUSTA DE AMBIENTE DE TESTE =====
+def is_test_env() -> bool:
+    """
+    Detecta automaticamente se estamos em um ambiente de teste.
+
+    Verifica múltiplas condições para garantir proteção do banco de produção:
+    1. Variável de ambiente TESTING_MODE explicitamente setada
+    2. Execução via pytest (pytest em sys.modules)
+    3. Script em execução está na pasta /tests ou \tests
+
+    Returns:
+        bool: True se em ambiente de teste, False caso contrário.
+    """
+    # Condição 1: Verificar variável de ambiente explícita
+    if os.environ.get("TESTING_MODE") == "1":
+        return True
+
+    # Condição 2: Verificar se rodando via pytest
+    if "pytest" in sys.modules:
+        return True
+
+    # Condição 3: Verificar se script em execução está em pasta /tests ou \tests
+    try:
+        script_path = os.path.abspath(sys.argv[0])
+        # Normalizar path separators para verificação
+        normalized_path = script_path.replace("\\", "/")
+        if "/tests/" in normalized_path:
+            return True
+    except (IndexError, Exception):
+        # Falhar de forma segura
+        pass
+
+    return False
+
+
+# Determinar se estamos em ambiente de teste
+TESTING_MODE = is_test_env()
+
+# Log da detecção
+if TESTING_MODE:
+    try:
+        print(
+            "[TESTE] MODO TESTE DETECTADO (Script em /tests ou ENV setado). Usando: test_finance.db"
+        )
+    except (UnicodeEncodeError, Exception):
+        print("[TEST] TEST MODE DETECTED. Using: test_finance.db")
+    logger.warning(
+        "MODO TESTE DETECTADO - Usando banco de teste para proteção de dados"
+    )
+
 # ===== DEFINIÇÃO ROBUSTA DO CAMINHO DO BANCO DE DADOS =====
 # Obter caminho da raiz do projeto (diretório acima de src/)
 PROJETO_RAIZ = os.path.dirname(
@@ -31,21 +83,28 @@ logger.info(f"📁 Raiz do projeto: {PROJETO_RAIZ}")
 # Diretório de dados
 DIRETORIO_DADOS = os.path.join(PROJETO_RAIZ, "data")
 
-# Criar diretório se não existir
-try:
-    os.makedirs(DIRETORIO_DADOS, exist_ok=True)
-    logger.info(f"📁 Diretório de dados criado/verificado: {DIRETORIO_DADOS}")
-except Exception as e:
-    logger.error(f"❌ Erro ao criar diretório de dados: {e}")
-    raise
+# Criar diretório se não existir (apenas em modo normal)
+if not TESTING_MODE:
+    try:
+        os.makedirs(DIRETORIO_DADOS, exist_ok=True)
+        logger.info(f"📁 Diretório de dados criado/verificado: {DIRETORIO_DADOS}")
+    except Exception as e:
+        logger.error(f"❌ Erro ao criar diretório de dados: {e}")
+        raise
 
 # Caminho completo do banco de dados
-CAMINHO_BANCO = os.path.join(DIRETORIO_DADOS, "finance.db")
-logger.info(f"🗄️  Banco de dados será salvo em: {CAMINHO_BANCO}")
+if TESTING_MODE:
+    # Use banco de teste em modo de testes
+    CAMINHO_BANCO = os.path.join(PROJETO_RAIZ, "test_finance.db")
+    logger.warning("TESTE: Banco de teste isolado em uso")
+    logger.warning(f"   Caminho: {CAMINHO_BANCO}")
+else:
+    CAMINHO_BANCO = os.path.join(DIRETORIO_DADOS, "finance.db")
+    logger.info(f"PRODUCAO: Banco de dados será salvo em: {CAMINHO_BANCO}")
 
 # Alternativa: Ler DATA_PATH do .env se existir
 DATA_PATH_ENV = os.getenv("DATA_PATH", None)
-if DATA_PATH_ENV:
+if DATA_PATH_ENV and not TESTING_MODE:
     logger.debug(f"DATA_PATH encontrado no .env: {DATA_PATH_ENV}")
 
 # URL do banco de dados SQLite (com caminho absoluto)
@@ -132,9 +191,23 @@ def init_database() -> None:
         logger.info(f"Banco de dados inicializado com sucesso em {DATABASE_URL}")
 
         # Auto-inicializar categorias padrão se banco estiver vazio
-        from src.database.operations import initialize_default_categories
+        from src.database.operations import (
+            initialize_default_categories,
+            ensure_fallback_categories,
+            ensure_default_accounts,
+        )
 
         success, msg = initialize_default_categories()
+        if success:
+            logger.info(msg)
+
+        # Garantir que categorias de fallback existem para importação
+        success, msg = ensure_fallback_categories()
+        if success:
+            logger.info(msg)
+
+        # Garantir que contas padrão existem para compatibilidade
+        success, msg = ensure_default_accounts()
         if success:
             logger.info(msg)
 

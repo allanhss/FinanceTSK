@@ -136,71 +136,33 @@ def transaction_form(tipo: str) -> dbc.Card:
 
     # Row 4: Específicos por tipo (Despesa vs Receita)
     if tipo == "despesa":
-        # Forma de Pagamento e Número de Parcelas para Despesas
-        linha_pagamento_parcelas = dbc.Row(
-            [
-                dbc.Col(
-                    [
-                        dbc.Label(
-                            "Forma de Pagamento",
-                            html_for=f"select-{tipo}-pagamento",
-                        ),
-                        dcc.Dropdown(
-                            id=f"select-{tipo}-pagamento",
-                            options=[
-                                {"label": "Dinheiro", "value": "dinheiro"},
-                                {"label": "Pix", "value": "pix"},
-                                {"label": "Crédito", "value": "credito"},
-                                {"label": "Débito", "value": "debito"},
-                                {"label": "Transferência", "value": "transferencia"},
-                                {"label": "Boleto", "value": "boleto"},
-                            ],
-                            placeholder="Selecione a forma",
-                        ),
-                    ],
-                    md=6,
-                ),
-                dbc.Col(
-                    [
-                        dbc.Label(
-                            "Número de Parcelas",
-                            html_for=f"input-{tipo}-parcelas",
-                        ),
-                        dbc.Input(
-                            id=f"input-{tipo}-parcelas",
-                            type="number",
-                            placeholder="Qtd Parcelas (ex: 10)",
-                            min=1,
-                            value=1,
-                        ),
-                    ],
-                    md=6,
-                ),
-            ],
-            className="mb-3",
-        )
-        linhas_formulario.append(linha_pagamento_parcelas)
-
-    elif tipo == "receita":
-        # Pessoa Origem para Receitas
-        linha_pessoa_origem = dbc.Row(
-            dbc.Col(
+        # Número de Parcelas para Despesas (envolvido em container oculto)
+        linha_parcelas = dbc.Row(
+            html.Div(
                 [
-                    dbc.Label(
-                        "Pessoa Origem",
-                        html_for=f"input-{tipo}-origem",
-                    ),
-                    dbc.Input(
-                        id=f"input-{tipo}-origem",
-                        type="text",
-                        placeholder="Ex: Chefe, Cliente, Banco X",
+                    dbc.Col(
+                        [
+                            dbc.Label(
+                                "Número de Parcelas",
+                                html_for=f"input-{tipo}-parcelas",
+                            ),
+                            dbc.Input(
+                                id=f"input-{tipo}-parcelas",
+                                type="number",
+                                placeholder="Qtd Parcelas (ex: 10)",
+                                min=1,
+                                value=1,
+                            ),
+                        ],
+                        md=6,
                     ),
                 ],
-                md=12,
+                id="container-parcelas",
+                style={"display": "none"},
             ),
             className="mb-3",
         )
-        linhas_formulario.append(linha_pessoa_origem)
+        linhas_formulario.append(linha_parcelas)
 
     # Row 5: Recorrência (para ambos)
     linha_recorrencia = dbc.Row(

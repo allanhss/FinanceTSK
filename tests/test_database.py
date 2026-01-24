@@ -14,7 +14,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.database.connection import init_database, get_db
-from src.database.models import Categoria, Transacao
+from src.database.models import Categoria, Transacao, Conta
 from src.database.operations import (
     create_category,
     get_categories,
@@ -22,6 +22,13 @@ from src.database.operations import (
     get_transactions,
     get_dashboard_summary,
 )
+
+
+def _get_default_account_id():
+    """Get default account ID for tests."""
+    with get_db() as session:
+        conta = session.query(Conta).filter_by(nome="Conta Padrão").first()
+        return conta.id if conta else 1
 
 
 @pytest.fixture(scope="function", autouse=True)
@@ -45,6 +52,7 @@ class TestTransacao:
         create_category("Alimentação", "despesa")
         categorias = get_categories(tipo="despesa")
         cat_id = next(c["id"] for c in categorias if c["nome"] == "Alimentação")
+        conta_id = _get_default_account_id()
 
         # Criar transação
         success, msg = create_transaction(
@@ -53,6 +61,7 @@ class TestTransacao:
             valor=150.50,
             data=date(2026, 1, 19),
             categoria_id=cat_id,
+            conta_id=conta_id,
         )
         assert success
         assert "sucesso" in msg.lower()
@@ -63,6 +72,7 @@ class TestTransacao:
         create_category("Salário", "receita")
         categorias = get_categories(tipo="receita")
         cat_id = next(c["id"] for c in categorias if c["nome"] == "Salário")
+        conta_id = _get_default_account_id()
 
         # Criar transação
         success, msg = create_transaction(
@@ -71,6 +81,7 @@ class TestTransacao:
             valor=5000.00,
             data=date(2026, 1, 19),
             categoria_id=cat_id,
+            conta_id=conta_id,
         )
         assert success
 
@@ -78,6 +89,7 @@ class TestTransacao:
         """Testa validação de tipo de transação."""
         create_category("Test", "despesa")
         cat_id = get_categories()[0]["id"]
+        conta_id = _get_default_account_id()
 
         success, msg = create_transaction(
             tipo="invalido",
@@ -85,6 +97,7 @@ class TestTransacao:
             valor=100.0,
             data=date(2026, 1, 19),
             categoria_id=cat_id,
+            conta_id=conta_id,
         )
         assert not success
 
@@ -92,6 +105,7 @@ class TestTransacao:
         """Testa validação de valor negativo."""
         create_category("Test", "despesa")
         cat_id = get_categories()[0]["id"]
+        conta_id = _get_default_account_id()
 
         success, msg = create_transaction(
             tipo="despesa",
@@ -99,6 +113,7 @@ class TestTransacao:
             valor=-100.0,
             data=date(2026, 1, 19),
             categoria_id=cat_id,
+            conta_id=conta_id,
         )
         assert not success
 
@@ -106,6 +121,7 @@ class TestTransacao:
         """Testa recuperação de transações."""
         create_category("Test", "despesa")
         cat_id = get_categories()[0]["id"]
+        conta_id = _get_default_account_id()
 
         create_transaction(
             tipo="despesa",
@@ -113,6 +129,7 @@ class TestTransacao:
             valor=100.0,
             data=date(2026, 1, 15),
             categoria_id=cat_id,
+            conta_id=conta_id,
         )
         create_transaction(
             tipo="despesa",
@@ -120,6 +137,7 @@ class TestTransacao:
             valor=200.0,
             data=date(2026, 1, 18),
             categoria_id=cat_id,
+            conta_id=conta_id,
         )
 
         transacoes = get_transactions()
@@ -127,9 +145,16 @@ class TestTransacao:
 
     def test_get_dashboard_summary(self):
         """Testa resumo do dashboard."""
+        from src.database.models import Conta
+
         # Criar categorias
         create_category("Salário", "receita")
         create_category("Alimentação", "despesa")
+
+        # Get default account
+        with get_db() as session:
+            conta = session.query(Conta).filter_by(nome="Conta Padrão").first()
+            conta_id = conta.id if conta else 1
 
         categorias = get_categories()
         cat_receita = next(c for c in categorias if c["tipo"] == "receita")
@@ -142,6 +167,7 @@ class TestTransacao:
             valor=5000.0,
             data=date(2026, 1, 19),
             categoria_id=cat_receita["id"],
+            conta_id=conta_id,
         )
         create_transaction(
             tipo="despesa",
@@ -149,6 +175,7 @@ class TestTransacao:
             valor=500.0,
             data=date(2026, 1, 19),
             categoria_id=cat_despesa["id"],
+            conta_id=conta_id,
         )
 
         resumo = get_dashboard_summary(month=1, year=2026)

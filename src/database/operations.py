@@ -4,8 +4,9 @@ from dateutil.relativedelta import relativedelta
 from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import joinedload
 from src.database.connection import get_db
-from src.database.models import Categoria, Transacao
+from src.database.models import Categoria, Transacao, Conta
 
 logger = logging.getLogger(__name__)
 
@@ -455,12 +456,626 @@ def initialize_default_categories() -> Tuple[bool, str]:
         return False, "Erro ao inicializar categorias padrão. Tente novamente."
 
 
+def ensure_fallback_categories() -> Tuple[bool, str]:
+    """
+    Ensures fallback "A Classificar" categories exist for imports.
+
+    Creates "A Classificar" categories for both income and expense types
+    if they don't already exist. These categories are used as defaults
+    when importing transactions.
+
+    Returns:
+        Tuple with (success: bool, message: str).
+
+    Example:
+        >>> ensure_fallback_categories()
+        (True, 'Categorias de fallback garantidas.')
+    """
+    try:
+        with get_db() as session:
+            # Check if fallback categories already exist
+            fallback_receita = (
+                session.query(Categoria)
+                .filter_by(nome="A Classificar", tipo=Categoria.TIPO_RECEITA)
+                .first()
+            )
+            fallback_despesa = (
+                session.query(Categoria)
+                .filter_by(nome="A Classificar", tipo=Categoria.TIPO_DESPESA)
+                .first()
+            )
+
+            created_count = 0
+
+            # Create fallback receita category if it doesn't exist
+            if not fallback_receita:
+                fallback_receita = Categoria(
+                    nome="A Classificar",
+                    tipo=Categoria.TIPO_RECEITA,
+                    cor="#6c757d",
+                    icone="📂",
+                    teto_mensal=0.0,
+                )
+                session.add(fallback_receita)
+                created_count += 1
+
+            # Create fallback despesa category if it doesn't exist
+            if not fallback_despesa:
+                fallback_despesa = Categoria(
+                    nome="A Classificar",
+                    tipo=Categoria.TIPO_DESPESA,
+                    cor="#6c757d",
+                    icone="📂",
+                    teto_mensal=0.0,
+                )
+                session.add(fallback_despesa)
+                created_count += 1
+
+            if created_count > 0:
+                session.commit()
+                logger.info(
+                    f"Categorias de fallback garantidas: " f"{created_count} criadas."
+                )
+                return True, "Categorias de fallback garantidas."
+            else:
+                logger.info("Categorias de fallback já existem.")
+                return True, "Categorias de fallback já existem."
+
+    except Exception as e:
+        logger.error(f"Erro ao garantir categorias de fallback: {e}")
+        return False, "Erro ao garantir categorias de fallback. Tente novamente."
+
+
+# ===== FUNÇÕES DE GERENCIAMENTO DE CONTAS =====
+
+
+def create_account(
+    nome: str,
+    tipo: str,
+    saldo_inicial: float = 0.0,
+) -> Tuple[bool, str]:
+    """
+    Creates a new account (checking, savings, card, investment, etc.).
+
+    Args:
+        nome: Account name (e.g., 'Nubank', 'Visa Infinite').
+        tipo: Account type ('conta', 'cartao', or 'investimento').
+        saldo_inicial: Initial balance (default 0.0).
+
+    Returns:
+        Tuple with (success: bool, message: str).
+
+    Example:
+        >>> create_account(
+        ...     nome='XP Investimentos',
+        ...     tipo='investimento',
+        ...     saldo_inicial=5000.0
+        ... )
+        (True, 'Conta criada com sucesso.')
+    """
+    try:
+        logger.debug(f"🔄 Criando conta: {nome} ({tipo})")
+
+        # Validar tipo
+        if tipo not in Conta.TIPOS_VALIDOS:
+            logger.error(f"❌ Tipo inválido: {tipo}")
+            return False, f"Tipo deve ser um de: {', '.join(Conta.TIPOS_VALIDOS)}"
+
+        # Validar saldo_inicial
+        if saldo_inicial < 0:
+            logger.error(f"❌ Saldo inicial negativo: {saldo_inicial}")
+            return False, "Saldo inicial não pode ser negativo."
+
+        with get_db() as session:
+            try:
+                # Verificar se conta já existe
+                conta_existente = session.query(Conta).filter_by(nome=nome).first()
+                if conta_existente:
+                    logger.warning(f"⚠️ Conta '{nome}' já existe")
+                    return False, f"Conta '{nome}' já existe no banco de dados."
+
+                # Criar nova conta
+                nova_conta = Conta(
+                    nome=nome,
+                    tipo=tipo,
+                    saldo_inicial=saldo_inicial,
+                )
+                session.add(nova_conta)
+                session.commit()
+
+                logger.info(
+                    f"✅ Conta criada: {nome} ({tipo}) - "
+                    f"Saldo inicial R$ {saldo_inicial:.2f}"
+                )
+                return True, "Conta criada com sucesso."
+
+            except IntegrityError as e:
+                session.rollback()
+                logger.error(f"❌ Erro de integridade ao criar conta: {e}")
+                return False, "Erro ao criar conta. Verifique os dados."
+            except Exception as e:
+                session.rollback()
+                logger.error(f"❌ Erro ao criar conta: {e}")
+                raise
+
+    except Exception as e:
+        logger.error(f"❌ Erro ao criar conta: {e}", exc_info=True)
+        return False, "Erro ao salvar conta. Tente novamente."
+
+
+def get_accounts(tipo: Optional[str] = None) -> List[Conta]:
+    """
+    Retrieves all accounts, optionally filtered by type.
+
+    Uses eager loading (joinedload) to load related transactions,
+    preventing "Detached Instance" errors when accessing transacoes
+    outside the database session.
+
+    Args:
+        tipo: Optional filter by account type ('conta', 'cartao', 'investimento').
+              If None, returns all accounts.
+
+    Returns:
+        List of Conta objects with transacoes pre-loaded.
+
+    Example:
+        >>> contas = get_accounts()
+        >>> contas_cartao = get_accounts(tipo='cartao')
+        >>> # Safe to access conta.transacoes after session closes
+    """
+    try:
+        with get_db() as session:
+            query = session.query(Conta).options(joinedload(Conta.transacoes))
+
+            if tipo:
+                if tipo not in Conta.TIPOS_VALIDOS:
+                    logger.warning(f"⚠️ Tipo inválido ao filtrar contas: {tipo}")
+                    return []
+                query = query.filter_by(tipo=tipo)
+
+            contas = query.order_by(Conta.nome).all()
+            logger.debug(
+                f"📋 Recuperadas {len(contas)} contas com transações carregadas"
+            )
+            return contas
+
+    except Exception as e:
+        logger.error(f"❌ Erro ao recuperar contas: {e}")
+        return []
+
+
+def get_account_by_id(conta_id: int) -> Optional[Conta]:
+    """
+    Retrieves a single account by ID.
+
+    Args:
+        conta_id: Account ID.
+
+    Returns:
+        Conta object or None if not found.
+    """
+    try:
+        with get_db() as session:
+            conta = session.query(Conta).filter_by(id=conta_id).first()
+            if not conta:
+                logger.debug(f"⚠️ Conta não encontrada: ID {conta_id}")
+                return None
+            return conta
+
+    except Exception as e:
+        logger.error(f"❌ Erro ao recuperar conta: {e}")
+        return None
+
+
+def get_account_balances_summary() -> Dict[str, Any]:
+    """
+    Calcula resumo de saldos agrupados por tipo de conta para Dashboard.
+
+    Busca todas as contas, calcula saldo de cada uma (saldo_inicial + receitas - despesas)
+    e retorna estrutura agrupada por tipo para visualização em Dashboard.
+
+    Estrutura de saldo por tipo:
+    - 'conta' (corrente): Liquidez disponível
+    - 'investimento': Patrimônio investido
+    - 'cartao' (crédito): Geralmente negativo (dívida)
+
+    Returns:
+        Dicionário com resumo de saldos:
+        {
+            "total_disponivel": float,      # Soma de contas correntes
+            "total_investido": float,       # Soma de investimentos
+            "total_cartoes": float,         # Soma de cartões (dívida)
+            "patrimonio_total": float,      # Soma de todos os tipos
+            "detalhe_por_conta": [          # Lista para cards individuais
+                {
+                    "id": int,
+                    "nome": str,
+                    "tipo": str,
+                    "saldo": float,
+                    "cor_tipo": str,  # '#' prefixed hex color
+                },
+                ...
+            ]
+        }
+
+    Example:
+        >>> resumo = get_account_balances_summary()
+        >>> print(f"Liquidez: R$ {resumo['total_disponivel']:,.2f}")
+        >>> print(f"Dívida: R$ {resumo['total_cartoes']:,.2f}")
+        >>> # Iterar cards
+        >>> for conta_info in resumo['detalhe_por_conta']:
+        ...     print(f"{conta_info['nome']}: R$ {conta_info['saldo']:,.2f}")
+    """
+    try:
+        with get_db() as session:
+            # Buscar todas as contas com transações carregadas
+            contas = (
+                session.query(Conta)
+                .options(joinedload(Conta.transacoes))
+                .order_by(Conta.tipo, Conta.nome)
+                .all()
+            )
+
+            logger.debug(f"📊 Calculando saldos de {len(contas)} contas...")
+
+            # Mapa de cores por tipo de conta
+            cores_tipo = {
+                "conta": "#3B82F6",  # Azul - Liquidez
+                "investimento": "#10B981",  # Verde - Crescimento
+                "cartao": "#EF4444",  # Vermelho - Dívida
+            }
+
+            # Acumuladores por tipo
+            totais_por_tipo = {
+                "conta": 0.0,
+                "investimento": 0.0,
+                "cartao": 0.0,
+            }
+
+            # Lista com detalhe de cada conta
+            detalhe_por_conta = []
+
+            # Calcular saldo de cada conta e acumular
+            for conta in contas:
+                # Calcular saldo: saldo_inicial + (receitas - despesas)
+                # Filtrar apenas transações até hoje (ignorar futuras)
+                saldo = conta.saldo_inicial
+
+                if conta.transacoes:
+                    # Filtrar transações passadas (data <= hoje)
+                    transacoes_passadas = [
+                        t for t in conta.transacoes if t.data <= date.today()
+                    ]
+
+                    for transacao in transacoes_passadas:
+                        # Adicionar receitas, subtrair despesas
+                        if transacao.tipo == "receita":
+                            saldo += transacao.valor
+                        elif transacao.tipo == "despesa":
+                            saldo -= transacao.valor
+
+                # Acumular no total do tipo
+                if conta.tipo in totais_por_tipo:
+                    totais_por_tipo[conta.tipo] += saldo
+
+                # Adicionar ao detalhe
+                detalhe_por_conta.append(
+                    {
+                        "id": conta.id,
+                        "nome": conta.nome,
+                        "tipo": conta.tipo,
+                        "saldo": saldo,
+                        "cor_tipo": cores_tipo.get(conta.tipo, "#6B7280"),
+                    }
+                )
+
+                logger.debug(f"  • {conta.nome} ({conta.tipo}): R$ {saldo:,.2f}")
+
+            # Calcular patrimônio total
+            patrimonio_total = sum(totais_por_tipo.values())
+
+            # Montar resultado
+            resultado = {
+                "total_disponivel": totais_por_tipo.get("conta", 0.0),
+                "total_investido": totais_por_tipo.get("investimento", 0.0),
+                "total_cartoes": totais_por_tipo.get("cartao", 0.0),
+                "patrimonio_total": patrimonio_total,
+                "detalhe_por_conta": detalhe_por_conta,
+            }
+
+            logger.info(
+                f"✓ Resumo de saldos calculado: "
+                f"Liquidez=R${resultado['total_disponivel']:,.2f} | "
+                f"Investido=R${resultado['total_investido']:,.2f} | "
+                f"Cartões=R${resultado['total_cartoes']:,.2f} | "
+                f"Total=R${resultado['patrimonio_total']:,.2f}"
+            )
+
+            return resultado
+
+    except Exception as e:
+        logger.error(f"❌ Erro ao calcular resumo de saldos: {e}", exc_info=True)
+        # Retornar estrutura com zeros em caso de erro
+        return {
+            "total_disponivel": 0.0,
+            "total_investido": 0.0,
+            "total_cartoes": 0.0,
+            "patrimonio_total": 0.0,
+            "detalhe_por_conta": [],
+        }
+
+
+def update_account(
+    conta_id: int,
+    nome: Optional[str] = None,
+    saldo_inicial: Optional[float] = None,
+) -> Tuple[bool, str]:
+    """
+    Updates an existing account.
+
+    Args:
+        conta_id: Account ID.
+        nome: New account name (optional).
+        saldo_inicial: New initial balance (optional).
+
+    Returns:
+        Tuple with (success: bool, message: str).
+
+    Example:
+        >>> update_account(
+        ...     conta_id=1,
+        ...     nome='Nubank Atualizado',
+        ...     saldo_inicial=10000.0
+        ... )
+        (True, 'Conta atualizada com sucesso.')
+    """
+    try:
+        logger.debug(f"🔄 Atualizando conta ID {conta_id}")
+
+        if saldo_inicial is not None and saldo_inicial < 0:
+            logger.error(f"❌ Saldo inicial negativo: {saldo_inicial}")
+            return False, "Saldo inicial não pode ser negativo."
+
+        with get_db() as session:
+            try:
+                conta = session.query(Conta).filter_by(id=conta_id).first()
+                if not conta:
+                    logger.warning(f"❌ Conta não encontrada: ID {conta_id}")
+                    return False, "Conta não encontrada."
+
+                # Verificar unicidade de nome se estiver sendo atualizado
+                if nome and nome != conta.nome:
+                    conta_existente = (
+                        session.query(Conta)
+                        .filter(
+                            Conta.nome == nome,
+                            Conta.id != conta_id,
+                        )
+                        .first()
+                    )
+                    if conta_existente:
+                        logger.warning(f"⚠️ Nome '{nome}' já está em uso")
+                        return False, f"Já existe conta com o nome '{nome}'."
+
+                # Atualizar campos
+                if nome:
+                    conta.nome = nome
+                if saldo_inicial is not None:
+                    conta.saldo_inicial = saldo_inicial
+
+                session.commit()
+
+                logger.info(f"✅ Conta {conta_id} atualizada com sucesso")
+                return True, "Conta atualizada com sucesso."
+
+            except Exception as e:
+                session.rollback()
+                logger.error(f"❌ Erro ao atualizar conta: {e}")
+                raise
+
+    except Exception as e:
+        logger.error(f"❌ Erro ao atualizar conta: {e}", exc_info=True)
+        return False, "Erro ao atualizar conta. Tente novamente."
+
+
+def delete_account(conta_id: int) -> Tuple[bool, str]:
+    """
+    Deletes an account and its associated transactions.
+
+    WARNING: This is a destructive operation. All transactions linked to
+    this account will also be deleted.
+
+    Args:
+        conta_id: Account ID to delete.
+
+    Returns:
+        Tuple with (success: bool, message: str).
+
+    Example:
+        >>> delete_account(conta_id=1)
+        (True, 'Conta deletada com sucesso.')
+    """
+    try:
+        logger.debug(f"🔄 Deletando conta ID {conta_id}")
+
+        with get_db() as session:
+            try:
+                conta = session.query(Conta).filter_by(id=conta_id).first()
+                if not conta:
+                    logger.warning(f"❌ Conta não encontrada: ID {conta_id}")
+                    return False, "Conta não encontrada."
+
+                # Check for associated transactions
+                transacoes_count = (
+                    session.query(Transacao).filter_by(conta_id=conta_id).count()
+                )
+                if transacoes_count > 0:
+                    logger.warning(
+                        f"⚠️ Tentativa de deletar conta com "
+                        f"{transacoes_count} transações"
+                    )
+                    return (
+                        False,
+                        f"Não é possível deletar conta com {transacoes_count} "
+                        f"transação(ões). Delete as transações primeiro.",
+                    )
+
+                # Delete account
+                nome_conta = conta.nome
+                session.delete(conta)
+                session.commit()
+
+                logger.info(f"✅ Conta '{nome_conta}' (ID {conta_id}) deletada")
+                return True, "Conta deletada com sucesso."
+
+            except Exception as e:
+                session.rollback()
+                logger.error(f"❌ Erro ao deletar conta: {e}")
+                raise
+
+    except Exception as e:
+        logger.error(f"❌ Erro ao deletar conta: {e}", exc_info=True)
+        return False, "Erro ao deletar conta. Tente novamente."
+
+
+def get_account_balance(conta_id: int) -> float:
+    """
+    Calculates the real balance of an account.
+
+    Balance = saldo_inicial + total_receitas - total_despesas
+
+    Args:
+        conta_id: Account ID.
+
+    Returns:
+        Float representing the account balance in reais.
+        Returns 0.0 if account not found.
+
+    Example:
+        >>> saldo = get_account_balance(conta_id=1)
+        >>> print(f"Saldo: R$ {saldo:.2f}")
+    """
+    try:
+        logger.debug(f"💰 Calculando saldo da conta {conta_id}")
+
+        with get_db() as session:
+            # Get account and verify it exists
+            conta = session.query(Conta).filter_by(id=conta_id).first()
+            if not conta:
+                logger.warning(f"⚠️ Conta não encontrada: ID {conta_id}")
+                return 0.0
+
+            # Get initial balance
+            saldo_inicial = conta.saldo_inicial
+            logger.debug(f"Saldo inicial: R$ {saldo_inicial:.2f}")
+
+            # Calculate total income (receitas)
+            total_receitas = (
+                session.query(func.sum(Transacao.valor))
+                .filter(
+                    Transacao.conta_id == conta_id,
+                    Transacao.tipo == "receita",
+                )
+                .scalar()
+                or 0.0
+            )
+            logger.debug(f"Total de receitas: R$ {total_receitas:.2f}")
+
+            # Calculate total expenses (despesas)
+            total_despesas = (
+                session.query(func.sum(Transacao.valor))
+                .filter(
+                    Transacao.conta_id == conta_id,
+                    Transacao.tipo == "despesa",
+                )
+                .scalar()
+                or 0.0
+            )
+            logger.debug(f"Total de despesas: R$ {total_despesas:.2f}")
+
+            # Calculate balance
+            saldo = saldo_inicial + total_receitas - total_despesas
+            logger.debug(f"✓ Saldo calculado: R$ {saldo:.2f}")
+
+            return saldo
+
+    except Exception as e:
+        logger.error(f"❌ Erro ao calcular saldo: {e}")
+        return 0.0
+
+
+def ensure_default_accounts() -> Tuple[bool, str]:
+    """
+    Ensures default accounts exist in the database.
+
+    Creates "Conta Padrão" (checking account) and "Investimentos"
+    (investment account) if they don't already exist. These are needed for
+    backward compatibility with existing transactions.
+
+    Returns:
+        Tuple with (success: bool, message: str).
+
+    Example:
+        >>> ensure_default_accounts()
+        (True, 'Contas padrão garantidas.')
+    """
+    try:
+        with get_db() as session:
+            # Check if default checking account exists
+            conta_padrao = (
+                session.query(Conta)
+                .filter_by(nome="Conta Padrão", tipo="conta")
+                .first()
+            )
+
+            # Check if investments account exists
+            investimentos = (
+                session.query(Conta)
+                .filter_by(nome="Investimentos", tipo="investimento")
+                .first()
+            )
+
+            created_count = 0
+
+            # Create default checking account if it doesn't exist
+            if not conta_padrao:
+                conta_padrao = Conta(
+                    nome="Conta Padrão",
+                    tipo="conta",
+                    saldo_inicial=0.0,
+                )
+                session.add(conta_padrao)
+                created_count += 1
+
+            # Create investments account if it doesn't exist
+            if not investimentos:
+                investimentos = Conta(
+                    nome="Investimentos",
+                    tipo="investimento",
+                    saldo_inicial=0.0,
+                )
+                session.add(investimentos)
+                created_count += 1
+
+            if created_count > 0:
+                session.commit()
+                logger.info(f"✅ {created_count} conta(s) padrão criada(s).")
+                return True, f"Contas padrão garantidas ({created_count} criada(s))."
+
+            return True, "Contas padrão já existem."
+
+    except Exception as e:
+        logger.error(f"❌ Erro ao garantir contas padrão: {e}")
+        return False, f"Erro ao garantir contas padrão: {e}"
+
+
 def create_transaction(
     tipo: str,
     descricao: str,
     valor: float,
     data: date,
     categoria_id: int,
+    conta_id: int,
     observacoes: Optional[str] = None,
     pessoa_origem: Optional[str] = None,
     tag: Optional[str | List[str]] = None,
@@ -475,6 +1090,10 @@ def create_transaction(
     """
     Creates one or more transactions with support for installments and recurrence.
 
+    Validates that transaction type is compatible with account type:
+    - 'receita': Only allowed for 'conta' and 'investimento' accounts
+    - 'despesa': Only allowed for 'conta' and 'cartao' accounts
+
     If numero_parcelas > 1, creates multiple transactions with sequential dates
     and reduced values (total_value / numero_parcelas).
 
@@ -487,6 +1106,7 @@ def create_transaction(
         valor: Transaction amount (must be positive).
         data: Transaction date (first installment or first occurrence).
         categoria_id: ID of the associated category.
+        conta_id: ID of the associated account (REQUIRED).
         observacoes: Optional additional notes.
         pessoa_origem: Optional name of origin person/entity.
         tag: Optional tag(s) for cross-cutting grouping. Can be:
@@ -511,6 +1131,7 @@ def create_transaction(
         ...     valor=300.0,
         ...     data=date(2026, 1, 18),
         ...     categoria_id=1,
+        ...     conta_id=1,
         ...     numero_parcelas=3,
         ...     forma_pagamento='credito',
         ...     tag=['Mãe', 'Saúde']
@@ -549,6 +1170,45 @@ def create_transaction(
         logger.debug(f"🔓 Abrindo sessão do banco...")
         with get_db() as session:
             try:
+                logger.debug(f"🔍 Verificando conta ID: {conta_id}")
+                # Validar se conta existe
+                conta = session.query(Conta).filter(Conta.id == conta_id).first()
+                if not conta:
+                    logger.error(f"❌ Conta não encontrada: ID {conta_id}")
+                    return False, "Conta não encontrada."
+
+                logger.debug(f"✓ Conta encontrada: {conta.nome} ({conta.tipo})")
+
+                # ===== VALIDAÇÃO DE REGRA DE NEGÓCIO: TIPO TRANSAÇÃO X TIPO CONTA =====
+                if tipo == "receita":
+                    # Receitas só são permitidas em contas e investimentos
+                    if conta.tipo not in ["conta", "investimento"]:
+                        logger.error(
+                            f"❌ Receita não permitida em conta do tipo '{conta.tipo}'. "
+                            f"Use 'conta' ou 'investimento'."
+                        )
+                        return (
+                            False,
+                            f"Receitas não são permitidas em contas do tipo "
+                            f"'{conta.tipo}'. Use uma conta corrente ou de "
+                            f"investimentos.",
+                        )
+                elif tipo == "despesa":
+                    # Despesas só são permitidas em contas e cartões
+                    if conta.tipo not in ["conta", "cartao"]:
+                        logger.error(
+                            f"❌ Despesa não permitida em conta do tipo '{conta.tipo}'. "
+                            f"Use 'conta' ou 'cartao'."
+                        )
+                        return (
+                            False,
+                            f"Despesas não são permitidas em contas do tipo "
+                            f"'{conta.tipo}'. Use uma conta corrente ou cartão de "
+                            f"crédito.",
+                        )
+
+                logger.debug(f"✓ Validação de regra de negócio OK")
+
                 logger.debug(f"🔍 Verificando categoria ID: {categoria_id}")
                 # Validar se categoria existe
                 categoria = (
@@ -558,6 +1218,7 @@ def create_transaction(
                 )
                 if not categoria:
                     logger.error(f"❌ Categoria não encontrada: ID {categoria_id}")
+
                     return False, "Categoria não encontrada."
 
                 logger.debug(f"✓ Categoria encontrada: {categoria.nome}")
@@ -578,6 +1239,7 @@ def create_transaction(
                             descricao=descricao_parcela,
                             valor=valor_parcela,
                             data=data_parcela,
+                            conta_id=conta_id,
                             categoria_id=categoria_id,
                             observacoes=observacoes,
                             pessoa_origem=pessoa_origem,
@@ -624,6 +1286,7 @@ def create_transaction(
                                 descricao=descricao_recorrente,
                                 valor=valor,
                                 data=data_atual,
+                                conta_id=conta_id,
                                 categoria_id=categoria_id,
                                 observacoes=observacoes,
                                 pessoa_origem=pessoa_origem,
@@ -654,12 +1317,12 @@ def create_transaction(
                             f"Registrando apenas a primeira ocorrência."
                         )
 
-                # ===== TRANSAÇÃO SIMPLES (SEM PARCELAMENTO OU RECORRÊNCIA) =====
                 transacao = Transacao(
                     tipo=tipo,
                     descricao=descricao.strip(),
                     valor=valor,
                     data=data,
+                    conta_id=conta_id,
                     categoria_id=categoria_id,
                     observacoes=observacoes,
                     pessoa_origem=pessoa_origem,
@@ -697,6 +1360,7 @@ def get_transactions(
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     tag: Optional[str] = None,
+    exclude_transfers: bool = False,
 ) -> List[Dict]:
     """
     Retrieves transactions filtered by date range and optional tag.
@@ -705,6 +1369,7 @@ def get_transactions(
         start_date: Start of date range (inclusive).
         end_date: End of date range (inclusive).
         tag: Optional tag filter for cross-cutting grouping (ex: 'Mãe', 'Trabalho').
+        exclude_transfers: If True, exclude "Transferência Interna" from results (default: False).
 
     Returns:
         List of transaction dictionaries, ordered by date (newest first).
@@ -719,6 +1384,12 @@ def get_transactions(
                 query = query.filter(Transacao.data <= end_date)
             if tag:
                 query = query.filter(Transacao.tag == tag)
+
+            # FILTER: Excluir "Transferência Interna" se solicitado
+            if exclude_transfers:
+                query = query.join(Transacao.categoria).filter(
+                    Categoria.nome != "Transferência Interna"
+                )
 
             transacoes = query.order_by(Transacao.data.desc()).all()
 
@@ -781,6 +1452,161 @@ def get_all_tags() -> List[str]:
         return []
 
 
+def get_unique_tags_list() -> List[str]:
+    """
+    Retrieves all unique tags from both 'tag' and 'tags' fields.
+
+    Queries all transactions with non-null tags/tag fields,
+    splits CSV-formatted tags, deduplicates, and returns sorted list.
+
+    Returns:
+        Sorted list of unique tag strings for dropdown/autocomplete.
+
+    Example:
+        >>> tags = get_unique_tags_list()
+        >>> 'Moto' in tags
+        True
+        >>> 'Viagem' in tags
+        True
+    """
+    try:
+        with get_db() as session:
+            # Query from both 'tag' and 'tags' columns
+            tags_from_tag = (
+                session.query(Transacao.tag)
+                .filter(Transacao.tag.isnot(None))
+                .distinct()
+                .all()
+            )
+
+            tags_from_tags = (
+                session.query(Transacao.tags)
+                .filter(Transacao.tags.isnot(None))
+                .distinct()
+                .all()
+            )
+
+            # Collect all individual tags
+            todas_tags_set: set[str] = set()
+
+            # Process 'tag' column
+            for tag_tuple in tags_from_tag:
+                tag_str = tag_tuple[0] if tag_tuple else None
+                if tag_str:
+                    if "," in tag_str:
+                        tags_individuais = [
+                            t.strip() for t in tag_str.split(",") if t.strip()
+                        ]
+                        todas_tags_set.update(tags_individuais)
+                    else:
+                        todas_tags_set.add(tag_str.strip())
+
+            # Process 'tags' column
+            for tags_tuple in tags_from_tags:
+                tags_str = tags_tuple[0] if tags_tuple else None
+                if tags_str:
+                    if "," in tags_str:
+                        tags_individuais = [
+                            t.strip() for t in tags_str.split(",") if t.strip()
+                        ]
+                        todas_tags_set.update(tags_individuais)
+                    else:
+                        todas_tags_set.add(tags_str.strip())
+
+            # Return sorted unique list
+            lista_tags = sorted(list(todas_tags_set))
+            logger.debug(
+                f"[TAGS] Lista unica de tags recuperada: {len(lista_tags)} entradas"
+            )
+            return lista_tags
+
+    except Exception as e:
+        logger.error(f"[TAGS] Erro ao recuperar lista de tags: {e}")
+        return []
+
+
+def get_classification_history() -> Dict[str, Dict[str, Any]]:
+    """
+    Builds a learning database from historical transaction classifications.
+
+    Queries all past transactions ordered by date (newest first) and creates
+    a dictionary mapping normalized descriptions to their most recent
+    category and tags assignments. This enables smart auto-suggestions when
+    importing new transactions.
+
+    Processing:
+    - Normalizes descriptions: lowercase, strip whitespace
+    - Skips duplicate descriptions (keeps most recent due to date ordering)
+    - Builds lookup: description -> {'categoria': str, 'tags': str}
+
+    Returns:
+        Dict mapping normalized description to classification info.
+        Structure: {
+            'posto ipiranga': {
+                'categoria': 'Transporte',
+                'tags': 'Carro,Gasolina'
+            },
+            'supermercado carrefour': {
+                'categoria': 'Alimentação',
+                'tags': 'Compras'
+            }
+        }
+
+    Example:
+        >>> history = get_classification_history()
+        >>> history.get('restaurant xyz')
+        {'categoria': 'Alimentação', 'tags': 'Lazer'}
+
+    Note:
+        Empty descriptions and None tags are handled gracefully.
+        If a description appears multiple times, only the most recent
+        classification is retained.
+    """
+    try:
+        with get_db() as session:
+            # Query all transactions ordered by date DESC (most recent first)
+            transacoes = (
+                session.query(
+                    Transacao.descricao,
+                    Categoria.nome,
+                    Transacao.tags,
+                )
+                .join(Transacao.categoria)
+                .order_by(Transacao.data.desc())
+                .all()
+            )
+
+            # Build classification history
+            historia_classificacao: Dict[str, Dict[str, Any]] = {}
+
+            for descricao, categoria_nome, tags_str in transacoes:
+                # Normalize description
+                descricao_normalizada = descricao.lower().strip()
+
+                # Skip empty descriptions
+                if not descricao_normalizada:
+                    continue
+
+                # Skip if already seen (keep most recent due to ordering)
+                if descricao_normalizada in historia_classificacao:
+                    continue
+
+                # Store classification
+                historia_classificacao[descricao_normalizada] = {
+                    "categoria": categoria_nome,
+                    "tags": tags_str or "",
+                }
+
+            logger.info(
+                f"Histórico de classificação carregado: {len(historia_classificacao)} entradas"
+            )
+            return historia_classificacao
+
+    except Exception as e:
+        logger.error(f"Erro ao construir histórico de classificação: {e}")
+        return {}
+
+
 def get_category_options(tipo: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Retrieves all categories formatted for Dash dcc.Dropdown.
@@ -820,62 +1646,99 @@ def get_category_options(tipo: Optional[str] = None) -> List[Dict[str, Any]]:
 
 def get_dashboard_summary(month: int, year: int) -> Dict[str, float]:
     """
-    Calculates summary metrics for a specific month.
+    Calculates summary metrics for a specific month across all accounts.
+
+    Iterates through all accounts and sums up:
+    - Saldo total = Sum of all account balances (saldo_inicial + receitas - despesas)
+    - For 'cartao' accounts, saldo is usually negative (representing credit card debt)
 
     Args:
         month: Month number (1-12).
         year: Year in 4-digit format.
 
     Returns:
-        Dictionary with 'total_receitas', 'total_despesas', 'saldo'.
+        Dictionary with:
+        - 'total_receitas': Total income across all accounts
+        - 'total_despesas': Total expenses across all accounts
+        - 'saldo': Total balance across all accounts
+        - 'saldo_por_tipo': Dictionary with balance breakdown by account type
     """
     try:
         with get_db() as session:
-            # Query for income
-            total_receitas = (
+            # Get all accounts to calculate their balances
+            contas = session.query(Conta).all()
+            logger.debug(f"📊 Calculando dashboard para {len(contas)} contas")
+
+            saldo_total = 0.0
+            saldo_por_tipo = {}
+            total_receitas_mes = 0.0
+            total_despesas_mes = 0.0
+
+            for conta in contas:
+                # Calculate account balance (full history)
+                saldo_conta = get_account_balance(conta.id)
+                saldo_total += saldo_conta
+                saldo_por_tipo[conta.nome] = {
+                    "tipo": conta.tipo,
+                    "saldo": saldo_conta,
+                }
+                logger.debug(f"  {conta.nome} ({conta.tipo}): R$ {saldo_conta:.2f}")
+
+            # Query for income in the specific month
+            start_date = date(year, month, 1)
+            end_date = date(
+                year if month < 12 else year + 1,
+                month + 1 if month < 12 else 1,
+                1,
+            ) - __import__("datetime").timedelta(days=1)
+
+            # FILTER: Excluir "Transferência Interna" das análises
+            # Transações de transferência são apenas movimentações de caixa
+            total_receitas_mes = (
                 session.query(func.sum(Transacao.valor))
+                .join(Transacao.categoria)
                 .filter(
                     Transacao.tipo == "receita",
-                    Transacao.data >= date(year, month, 1),
-                    Transacao.data
-                    <= date(
-                        year if month < 12 else year + 1,
-                        month + 1 if month < 12 else 1,
-                        1,
-                    )
-                    - __import__("datetime").timedelta(days=1),
+                    Transacao.data >= start_date,
+                    Transacao.data <= end_date,
+                    Categoria.nome != "Transferência Interna",
                 )
                 .scalar()
                 or 0.0
             )
 
-            # Query for expenses
-            total_despesas = (
+            # Query for expenses in the specific month
+            # FILTER: Excluir "Transferência Interna" das análises
+            total_despesas_mes = (
                 session.query(func.sum(Transacao.valor))
+                .join(Transacao.categoria)
                 .filter(
                     Transacao.tipo == "despesa",
-                    Transacao.data >= date(year, month, 1),
-                    Transacao.data
-                    <= date(
-                        year if month < 12 else year + 1,
-                        month + 1 if month < 12 else 1,
-                        1,
-                    )
-                    - __import__("datetime").timedelta(days=1),
+                    Transacao.data >= start_date,
+                    Transacao.data <= end_date,
+                    Categoria.nome != "Transferência Interna",
                 )
                 .scalar()
                 or 0.0
             )
 
-            saldo = float(total_receitas) - float(total_despesas)
+            saldo_mes = float(total_receitas_mes) - float(total_despesas_mes)
 
             resumo = {
-                "total_receitas": float(total_receitas),
-                "total_despesas": float(total_despesas),
-                "saldo": saldo,
+                "total_receitas": float(total_receitas_mes),
+                "total_despesas": float(total_despesas_mes),
+                "saldo": saldo_mes,
+                "saldo_total": saldo_total,
+                "saldo_por_tipo": saldo_por_tipo,
             }
 
-            logger.info(f"Resumo {month}/{year}: R$ {saldo:.2f}")
+            logger.info(
+                f"📊 Resumo {month}/{year}: "
+                f"Receitas R$ {total_receitas_mes:.2f} | "
+                f"Despesas R$ {total_despesas_mes:.2f} | "
+                f"Saldo Mês R$ {saldo_mes:.2f} | "
+                f"Saldo Total R$ {saldo_total:.2f}"
+            )
             return resumo
 
     except Exception as e:
@@ -940,30 +1803,36 @@ def get_cash_flow_data(
 
         with get_db() as session:
             # Query de receitas agrupadas por mês
+            # FILTER: Excluir "Transferência Interna" das análises
             receitas_query = (
                 session.query(
                     func.strftime("%Y-%m", Transacao.data).label("mes"),
                     func.sum(Transacao.valor).label("total"),
                 )
+                .join(Transacao.categoria)
                 .filter(
                     Transacao.tipo == "receita",
                     Transacao.data >= data_inicio,
                     Transacao.data <= data_fim,
+                    Categoria.nome != "Transferência Interna",
                 )
                 .group_by("mes")
                 .all()
             )
 
             # Query de despesas agrupadas por mês
+            # FILTER: Excluir "Transferência Interna" das análises
             despesas_query = (
                 session.query(
                     func.strftime("%Y-%m", Transacao.data).label("mes"),
                     func.sum(Transacao.valor).label("total"),
                 )
+                .join(Transacao.categoria)
                 .filter(
                     Transacao.tipo == "despesa",
                     Transacao.data >= data_inicio,
                     Transacao.data <= data_fim,
+                    Categoria.nome != "Transferência Interna",
                 )
                 .group_by("mes")
                 .all()
@@ -1068,6 +1937,7 @@ def get_category_matrix_data(
 
         with get_db() as session:
             # Query: Agrupar transações por categoria e mês
+            # FILTER: Excluir "Transferência Interna" das análises
             query = (
                 session.query(
                     Categoria.id,
@@ -1082,6 +1952,7 @@ def get_category_matrix_data(
                 .filter(
                     Transacao.data >= data_inicio,
                     Transacao.data <= data_fim,
+                    Categoria.nome != "Transferência Interna",
                 )
                 .group_by(
                     Categoria.id,
@@ -1199,8 +2070,19 @@ def get_tag_matrix_data(months_past: int = 6, months_future: int = 6) -> Dict[st
     """
     try:
         hoje = date.today()
-        data_inicio = hoje - relativedelta(months=months_past)
-        data_fim = hoje + relativedelta(months=months_future)
+        # Calcular range: months_past meses atrás até months_future meses à frente
+        data_inicio_temp = hoje - relativedelta(months=months_past)
+        data_fim_temp = hoje + relativedelta(months=months_future)
+
+        # Padronizar: Primeiro dia do mês inicial até o último dia do mês final
+        data_inicio = data_inicio_temp.replace(day=1)
+
+        # Último dia do mês final (usar replace day=1 do próximo mês - 1 dia)
+        data_fim = (
+            data_fim_temp.replace(day=1)
+            + relativedelta(months=1)
+            - relativedelta(days=1)
+        )
 
         # Gerar lista de todos os meses no intervalo
         meses_intervalo = []

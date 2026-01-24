@@ -1,4 +1,5 @@
 """Verify callback responds to date filter changes."""
+
 import sys
 from pathlib import Path
 

@@ -201,6 +201,112 @@ class Categoria(Base):
         }
 
 
+class Conta(Base):
+    """
+    Modelo de Conta/Cartão/Investimento.
+
+    Representa contas bancárias, cartões de crédito, investimentos ou
+    outras estruturas de armazenamento de valor. Cada transação é
+    vinculada a uma conta específica.
+
+    Attributes:
+        id: Identificador único da conta
+        nome: Nome da conta (ex: "Nubank", "XP Investimentos", "Visa Infinite")
+        tipo: Tipo da conta ('conta', 'cartao', 'investimento')
+        saldo_inicial: Saldo inicial da conta (default 0.0)
+        created_at: Data/hora de criação
+        transacoes: Relacionamento com transações vinculadas
+    """
+
+    __tablename__ = "contas"
+
+    # Tipos válidos de conta
+    TIPO_CONTA = "conta"
+    TIPO_CARTAO = "cartao"
+    TIPO_INVESTIMENTO = "investimento"
+    TIPOS_VALIDOS = [TIPO_CONTA, TIPO_CARTAO, TIPO_INVESTIMENTO]
+
+    # Colunas
+    id: int = Column(Integer, primary_key=True, autoincrement=True)
+    nome: str = Column(String(100), nullable=False, index=True)
+    tipo: str = Column(String(20), nullable=False, index=True)
+    saldo_inicial: float = Column(Float, nullable=False, default=0.0)
+    created_at: datetime = Column(DateTime, nullable=False, default=datetime.now)
+
+    # Relacionamentos
+    transacoes: Mapped[List["Transacao"]] = relationship(
+        "Transacao",
+        back_populates="conta",
+        lazy="select",
+        cascade="all, delete-orphan",
+    )
+
+    def __init__(
+        self,
+        nome: str,
+        tipo: str,
+        saldo_inicial: float = 0.0,
+    ):
+        """
+        Inicializa uma nova Conta.
+
+        Args:
+            nome: Nome da conta (ex: "Nubank")
+            tipo: Tipo de conta ('conta', 'cartao' ou 'investimento')
+            saldo_inicial: Saldo inicial (default 0.0)
+
+        Raises:
+            ValueError: Se tipo não é válido
+        """
+        if tipo not in self.TIPOS_VALIDOS:
+            raise ValueError(
+                f"Tipo inválido: {tipo}. "
+                f"Valores válidos: {', '.join(self.TIPOS_VALIDOS)}"
+            )
+        self.nome = nome
+        self.tipo = tipo
+        self.saldo_inicial = saldo_inicial
+
+    def __repr__(self) -> str:
+        """
+        Representação em string legível da conta.
+
+        Returns:
+            String no formato: Conta(id=1, nome='Nubank', tipo='conta')
+        """
+        return f"Conta(id={self.id}, nome='{self.nome}', tipo='{self.tipo}')"
+
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Converte a conta para dicionário.
+
+        Inclui todos os campos e informações derivadas como contagem
+        de transações. Datas são convertidas para formato ISO.
+
+        Returns:
+            Dicionário com dados da conta
+
+        Example:
+            >>> conta.to_dict()
+            {
+                'id': 1,
+                'nome': 'Nubank',
+                'tipo': 'conta',
+                'saldo_inicial': 5000.0,
+                'created_at': '2026-01-18T10:30:00',
+                'total_transacoes': 42
+            }
+        """
+        return {
+            "id": self.id,
+            "nome": self.nome,
+            "tipo": self.tipo,
+            "saldo_inicial": self.saldo_inicial,
+            "created_at": (self.created_at.isoformat() if self.created_at else None),
+            "total_transacoes": len(self.transacoes) if self.transacoes else 0,
+        }
+
+
 class Transacao(Base):
     """
     Modelo de Transação (Receita ou Despesa).
@@ -244,6 +350,7 @@ class Transacao(Base):
     descricao: str = Column(String(200), nullable=False)
     valor: float = Column(Float, nullable=False)
     data: datetime.date = Column(Date, nullable=False, index=True)
+    conta_id: int = Column(Integer, ForeignKey("contas.id"), nullable=False, index=True)
     categoria_id: int = Column(
         Integer, ForeignKey("categorias.id"), nullable=False, index=True
     )
@@ -264,6 +371,9 @@ class Transacao(Base):
     )
 
     # Relacionamentos
+    conta: Mapped[Conta] = relationship(
+        "Conta", back_populates="transacoes", lazy="joined"
+    )
     categoria: Mapped[Categoria] = relationship(
         "Categoria", back_populates="transacoes", lazy="joined"
     )
@@ -281,6 +391,7 @@ class Transacao(Base):
         descricao: str,
         valor: float,
         data: datetime.date,
+        conta_id: int,
         categoria_id: int,
         pessoa_origem: Optional[str] = None,
         observacoes: Optional[str] = None,
@@ -302,6 +413,7 @@ class Transacao(Base):
             descricao: Descrição da transação
             valor: Valor em reais (deve ser positivo)
             data: Data da transação
+            conta_id: ID da conta
             categoria_id: ID da categoria
             pessoa_origem: Pessoa que originou (opcional)
             observacoes: Observações adicionais (opcional)
@@ -325,6 +437,7 @@ class Transacao(Base):
             ...     descricao="Compra no mercado",
             ...     valor=150.50,
             ...     data=date(2026, 1, 18),
+            ...     conta_id=1,
             ...     categoria_id=1,
             ...     tags="supermercado,alimentação",
             ...     forma_pagamento="credito",
@@ -347,6 +460,7 @@ class Transacao(Base):
         self.descricao = descricao.strip()
         self.valor = valor
         self.data = data
+        self.conta_id = conta_id
         self.categoria_id = categoria_id
         self.pessoa_origem = pessoa_origem
         self.observacoes = observacoes

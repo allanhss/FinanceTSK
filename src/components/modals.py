@@ -13,7 +13,8 @@ def render_transaction_modal(is_open: bool = False) -> dbc.Modal:
     Renderiza um modal com formulários de receita e despesa em abas.
 
     Exibe um modal Bootstrap com duas abas internas que alternam
-    entre formulários de entrada de Receita e Despesa.
+    entre formulários de entrada de Receita e Despesa. Inclui seleção
+    de conta com filtros por tipo de transação.
 
     Args:
         is_open: Se True, modal abre por padrão. Padrão: False.
@@ -54,7 +55,10 @@ def render_transaction_modal(is_open: bool = False) -> dbc.Modal:
                                     value="tab-despesa",
                                     children=[
                                         html.Div(
-                                            transaction_form("despesa"),
+                                            [
+                                                _render_conta_selector("despesa"),
+                                                transaction_form("despesa"),
+                                            ],
                                             className="p-3",
                                         )
                                     ],
@@ -64,7 +68,10 @@ def render_transaction_modal(is_open: bool = False) -> dbc.Modal:
                                     value="tab-receita",
                                     children=[
                                         html.Div(
-                                            transaction_form("receita"),
+                                            [
+                                                _render_conta_selector("receita"),
+                                                transaction_form("receita"),
+                                            ],
                                             className="p-3",
                                         )
                                     ],
@@ -103,3 +110,33 @@ def render_transaction_modal(is_open: bool = False) -> dbc.Modal:
             size="lg",
             centered=True,
         )
+
+
+def _render_conta_selector(tipo: str) -> dbc.Row:
+    """
+    Renderiza seletor de conta para modal de transação.
+
+    Args:
+        tipo: Tipo de transação ('receita' ou 'despesa').
+
+    Returns:
+        dbc.Row com dropdown de seleção de conta.
+    """
+    return dbc.Row(
+        dbc.Col(
+            [
+                dbc.Label(
+                    "Conta",
+                    html_for=f"select-{tipo}-conta",
+                    className="fw-bold",
+                ),
+                dcc.Dropdown(
+                    id=f"select-{tipo}-conta",
+                    placeholder="Selecione uma conta",
+                    clearable=False,
+                ),
+            ],
+            md=12,
+        ),
+        className="mb-3",
+    )

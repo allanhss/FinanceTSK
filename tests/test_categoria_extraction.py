@@ -1,4 +1,5 @@
 """Test script for categoria name extraction in donut chart."""
+
 import sys
 from pathlib import Path
 

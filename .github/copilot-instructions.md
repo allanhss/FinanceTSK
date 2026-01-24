@@ -90,10 +90,66 @@ Se o usuário pedir um teste ou validação, SEMPRE criar em:
 
 ---
 
+## 🛑 REGRA DE SEGURANÇA DE DADOS
+
+### Proteção do Banco de Produção
+
+**CRÍTICO**: Nunca permita que scripts de teste acessem o banco de produção (`finance.db`).
+
+#### 1️⃣ Nunca assuma isolamento automático
+- A pasta `/tests/` NÃO isola automaticamente o banco.
+- A detecção de ambiente em `connection.py` oferece 3 camadas de proteção, mas adicional defensivo é sempre bem-vindo.
+
+#### 2️⃣ Todos os scripts em `tests/validation_*.py` DEVEM incluir no topo:
+
+```python
+import os
+os.environ["TESTING_MODE"] = "1"  # Forçar modo teste e usar test_finance.db
+```
+
+**Posicionamento obrigatório**: ANTES de qualquer import do `src/`.
+
+Exemplo correto:
+```python
+import os
+os.environ["TESTING_MODE"] = "1"  # ← Primeiro!
+
+import sys
+sys.path.insert(0, os.path.abspath(...))
+
+from src.database.connection import engine  # ← Depois
+```
+
+#### 3️⃣ Uso de banco de dados em scripts
+- **Operações de leitura**: Pode usar qualquer banco.
+- **Operações de escrita** (CREATE/INSERT/DELETE): SEMPRE use `test_finance.db` ou `:memory:`.
+- Nunca faça operações que modifiquem o banco sem estar 100% certo de estar no ambiente de teste.
+
+#### 4️⃣ Validação em testes
+- Sempre include validação do `engine.url` para confirmar que está usando `test_finance.db`.
+- Falhe explicitamente se detectar `finance.db` fora do ambiente esperado.
+
+**Exemplos de validação obrigatória**:
+```python
+# ❌ ERRADO: Sem proteção
+from src.database.connection import engine
+engine.execute("DELETE FROM Transacao")  # Pode deletar dados reais!
+
+# ✅ CORRETO: Com proteção em 3 camadas
+import os
+os.environ["TESTING_MODE"] = "1"
+
+from src.database.connection import engine, TESTING_MODE
+assert "test_finance.db" in str(engine.url), "Não está em ambiente de teste!"
+engine.execute("DELETE FROM Transacao")  # Seguro
+```
+
+---
+
 ## 🇧🇷 Contexto Brasileiro
 - **Moeda**: Exibir sempre como "R$ 1.234,56".
 - **Datas**: Input/Output visual em "DD/MM/YYYY". Banco em `date` objects.
 
 ---
 
-**Última Atualização**: Janeiro 2026 (Versão 2.0 - Sniper Workflow)
+**Última Atualização**: Janeiro 2026 (Versão 2.1 - Proteção de Dados + Sniper Workflow)

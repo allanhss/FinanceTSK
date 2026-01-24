@@ -184,6 +184,7 @@ class TestIconSeparation:
             "tipo",
             "cor",
             "icone",
+            "teto_mensal",
             "created_at",
             "total_transacoes",
         }

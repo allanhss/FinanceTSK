@@ -19,12 +19,12 @@ logger = logging.getLogger(__name__)
 def render_evolution_chart(data: Dict[str, Any]) -> dcc.Graph:
     """
     Renderiza gráfico de evolução financeira com barras de receitas/despesas
-    e linha de saldo acumulado.
+    e linha de patrimônio acumulado.
 
     Exibe:
     - Barras agrupadas: Receitas (verde) e Despesas (vermelho) por mês.
-    - Linha sobreposta: Saldo acumulado (azul) evoluindo ao longo do tempo.
-    - Layout com fundo transparente e legenda horizontal.
+    - Linha sobreposta: Patrimônio Acumulado (roxo) evoluindo ao longo do tempo.
+    - Layout com eixo Y único para melhor comparação visual.
 
     Args:
         data: Dicionário retornado por `get_category_matrix_data` com:
@@ -41,7 +41,9 @@ def render_evolution_chart(data: Dict[str, Any]) -> dcc.Graph:
         >>> chart = render_evolution_chart(matriz)
     """
     try:
-        logger.debug("📈 Renderizando gráfico de evolução financeira")
+        logger.debug(
+            "📈 Renderizando gráfico de evolução financeira com patrimônio acumulado"
+        )
 
         meses = data.get("meses", [])
         receitas_data = data.get("receitas", [])
@@ -49,9 +51,7 @@ def render_evolution_chart(data: Dict[str, Any]) -> dcc.Graph:
         saldos = data.get("saldos", [])
 
         if not meses:
-            logger.warning(
-                "⚠️ Nenhum mês disponível para gráfico de evolução"
-            )
+            logger.warning("⚠️ Nenhum mês disponível para gráfico de evolução")
             fig = go.Figure()
             fig.add_annotation(
                 text="Sem dados disponíveis",
@@ -61,9 +61,7 @@ def render_evolution_chart(data: Dict[str, Any]) -> dcc.Graph:
                 x=0.5,
                 y=0.5,
             )
-            return dcc.Graph(
-                figure=fig, config={"displayModeBar": False}
-            )
+            return dcc.Graph(figure=fig, config={"displayModeBar": False})
 
         # Processar dados da matriz: agregar valores por mês
         # receitas_data e despesas_data são listas de dicts com {"nome", "valores": {mes: total}, ...}
@@ -87,15 +85,18 @@ def render_evolution_chart(data: Dict[str, Any]) -> dcc.Graph:
             )
             despesas_valores.append(soma_despesas)
 
-        # Se não houver saldos, calcular
-        saldos_valores = [
-            r - d for r, d in zip(receitas_valores, despesas_valores)
-        ]
+        # Calcular saldo mensal e montante acumulado
+        saldos_mensais = [r - d for r, d in zip(receitas_valores, despesas_valores)]
+        montante_acumulado = []
+        acumulado = 0.0
+        for saldo in saldos_mensais:
+            acumulado += saldo
+            montante_acumulado.append(acumulado)
 
         # Verificar se todos os valores são zero (sem histórico)
         total_receitas = sum(receitas_valores)
         total_despesas = sum(despesas_valores)
-        
+
         if total_receitas == 0 and total_despesas == 0:
             logger.info("ℹ️ Sem histórico recente para exibir gráfico de evolução")
             return html.Div(
@@ -120,16 +121,17 @@ def render_evolution_chart(data: Dict[str, Any]) -> dcc.Graph:
                         },
                     )
                 ],
-                style={"minHeight": "400px", "display": "flex", "alignItems": "center"}
+                style={"minHeight": "400px", "display": "flex", "alignItems": "center"},
             )
 
         logger.info(
             f"✓ Gráfico de evolução: {len(meses)} meses, "
             f"Receitas: {total_receitas:.2f}, "
-            f"Despesas: {total_despesas:.2f}"
+            f"Despesas: {total_despesas:.2f}, "
+            f"Patrimônio Final: {montante_acumulado[-1]:.2f}"
         )
 
-        # Criar figura com barras agrupadas
+        # Criar figura com barras agrupadas + linha de patrimônio
         fig = go.Figure()
 
         # Adicionar barra de receitas (verde)
@@ -154,30 +156,37 @@ def render_evolution_chart(data: Dict[str, Any]) -> dcc.Graph:
             )
         )
 
-        # Adicionar linha de saldo (azul)
+        # Adicionar barra de saldo mensal (azul)
         fig.add_trace(
-            go.Scatter(
-                name="Saldo",
+            go.Bar(
+                name="Saldo do Mês",
                 x=meses,
-                y=saldos_valores,
-                mode="lines+markers",
-                line=dict(color="#3498db", width=3),
-                marker=dict(size=8),
-                yaxis="y2",
+                y=saldos_mensais,
+                marker_color="#3498db",
+                marker_line_width=0,
             )
         )
 
-        # Configurar layout
+        # Adicionar linha de patrimônio acumulado (roxo/azul escuro)
+        fig.add_trace(
+            go.Scatter(
+                name="Patrimônio Acumulado",
+                x=meses,
+                y=montante_acumulado,
+                mode="lines+markers",
+                line=dict(color="#9b59b6", width=3),
+                marker=dict(size=8),
+                fill="tozeroy",
+                fillcolor="rgba(155, 89, 182, 0.1)",
+            )
+        )
+
+        # Configurar layout com eixo Y único
         fig.update_layout(
             barmode="group",
-            title="📈 Evolução Financeira - Receitas vs Despesas",
+            title="📈 Evolução Financeira - Receitas, Despesas, Saldo e Patrimônio Acumulado",
             xaxis_title="Período",
-            yaxis_title="Receitas / Despesas (R$)",
-            yaxis2=dict(
-                title="Saldo (R$)",
-                overlaying="y",
-                side="right",
-            ),
+            yaxis_title="Valores em R$",
             hovermode="x unified",
             legend=dict(
                 orientation="h",
@@ -190,7 +199,7 @@ def render_evolution_chart(data: Dict[str, Any]) -> dcc.Graph:
             paper_bgcolor="rgba(0,0,0,0)",
             font=dict(family="Arial, sans-serif", size=12),
             height=400,
-            margin=dict(l=60, r=60, t=60, b=60),
+            margin=dict(l=60, r=60, t=80, b=60),
         )
 
         # Remove a cor das linhas da grid (manter apenas o padrão)
@@ -217,7 +226,7 @@ def render_evolution_chart(data: Dict[str, Any]) -> dcc.Graph:
 
 
 def render_top_expenses_chart(
-    current_month_data: Union[List[Dict[str, Any]], pd.DataFrame]
+    current_month_data: Union[List[Dict[str, Any]], pd.DataFrame],
 ) -> dcc.Graph:
     """
     Renderiza gráfico de rosca (donut) com as top 5 categorias de despesa
@@ -270,7 +279,7 @@ def render_top_expenses_chart(
                         },
                     )
                 ],
-                style={"minHeight": "400px", "display": "flex", "alignItems": "center"}
+                style={"minHeight": "400px", "display": "flex", "alignItems": "center"},
             )
 
         # Converter para DataFrame se for lista
@@ -303,7 +312,7 @@ def render_top_expenses_chart(
                         },
                     )
                 ],
-                style={"minHeight": "400px", "display": "flex", "alignItems": "center"}
+                style={"minHeight": "400px", "display": "flex", "alignItems": "center"},
             )
 
         # Agrupar por categoria e somar valores
@@ -315,7 +324,7 @@ def render_top_expenses_chart(
         for item in current_month_data:
             try:
                 valor = float(item.get(valor_col, 0) or 0)
-                
+
                 # Extrair nome da categoria (pode ser dict ou string)
                 categoria_raw = item.get(categoria_col, "Sem categoria")
                 if isinstance(categoria_raw, dict):
@@ -327,11 +336,8 @@ def render_top_expenses_chart(
                 else:
                     # Se for outro tipo, converter para string seguramente
                     categoria = str(categoria_raw) if categoria_raw else "Sem categoria"
-                
-                dados_limpos.append({
-                    categoria_col: categoria,
-                    valor_col: valor
-                })
+
+                dados_limpos.append({categoria_col: categoria, valor_col: valor})
             except (TypeError, ValueError):
                 # Pular items com valor inválido
                 continue
@@ -360,16 +366,14 @@ def render_top_expenses_chart(
                         },
                     )
                 ],
-                style={"minHeight": "400px", "display": "flex", "alignItems": "center"}
+                style={"minHeight": "400px", "display": "flex", "alignItems": "center"},
             )
 
         df = pd.DataFrame(dados_limpos)
 
         # Agrupar e ordenar
         df_agrupado = (
-            df.groupby(categoria_col)[valor_col]
-            .sum()
-            .sort_values(ascending=False)
+            df.groupby(categoria_col)[valor_col].sum().sort_values(ascending=False)
         )
 
         logger.info(
@@ -390,10 +394,12 @@ def render_top_expenses_chart(
             valores.append(resto)
 
         # Criar DataFrame para Plotly Express
-        df_grafico = pd.DataFrame({
-            "categoria": labels,
-            "valor": valores,
-        })
+        df_grafico = pd.DataFrame(
+            {
+                "categoria": labels,
+                "valor": valores,
+            }
+        )
 
         # Definir cores (palette)
         cores = [

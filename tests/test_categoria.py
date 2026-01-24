@@ -276,6 +276,8 @@ class TestCategoriaIntegration:
 
     def test_criar_transacao_com_categoria(self):
         """Testa criação de transação com categoria tipada."""
+        from src.database.models import Conta
+
         # Criar categoria de despesa
         success, msg = create_category("Alimentação", "despesa")
         assert success
@@ -284,6 +286,11 @@ class TestCategoriaIntegration:
         categorias = get_categories(tipo="despesa")
         cat_id = next(c["id"] for c in categorias if c["nome"] == "Alimentação")
 
+        # Get default account
+        with get_db() as session:
+            conta = session.query(Conta).filter_by(nome="Conta Padrão").first()
+            conta_id = conta.id if conta else 1
+
         # Criar transação
         success, msg = create_transaction(
             tipo="despesa",
@@ -291,6 +298,7 @@ class TestCategoriaIntegration:
             valor=150.50,
             data=date(2026, 1, 19),
             categoria_id=cat_id,
+            conta_id=conta_id,
         )
         assert success
 
